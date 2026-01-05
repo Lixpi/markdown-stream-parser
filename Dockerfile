@@ -1,63 +1,39 @@
 # Set Node.js version
 ARG NODE_VERSION=23
-ARG TREE_SITTER_VERSION=0.25.5
+
 # Stage 1: Build
-# FROM node:${NODE_VERSION}-alpine
-# FROM frolvlad/alpine-glibc
-FROM node:20-slim
+FROM node:${NODE_VERSION}-alpine
 
 # Install necessary packages
-# RUN apk add --update --no-cache curl python3 make g++ gcc libc-dev
+# tree-sitter needs C/C++ compiler (g++, make) and python3
+# cargo is needed to install tree-sitter-cli from source because npm install fails due to network/SSL issues with GitHub releases in this environment
+RUN apk add --update --no-cache curl python3 make g++ cargo
 
-RUN apt-get update && apt-get install -y \
-    xz-utils \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Download and install Node.js
-# RUN curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}.0.0/node-v${NODE_VERSION}.0.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1
-
-ADD https://nodejs.org/dist/v23.0.0/node-v23.0.0-linux-x64.tar.gz /tmp/node.tar.gz
-RUN tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 && rm /tmp/node.tar.gz
-
-ADD https://github.com/tree-sitter/tree-sitter/releases/download/v0.25.5/tree-sitter-linux-x64.gz /tmp/tree-sitter.gz
-RUN gzip -d /tmp/tree-sitter.gz \
-    && chmod +x /tmp/tree-sitter \
-    && mv /tmp/tree-sitter /usr/local/bin/tree-sitter \
-    && tree-sitter --version
-
-# Verify tree-sitter works
-RUN tree-sitter --version
-
+# Install pnpm globally
 RUN npm install -g pnpm
+
+# Install tree-sitter-cli from source via cargo (bypassing GitHub releases download issue)
+# Pin version to 0.25.0 to avoid dependency on libloading 0.9.0 which requires newer Rust than available in node:23-alpine
+RUN cargo install --locked --version 0.25.0 tree-sitter-cli
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Set environment variables for C++ compilation
 ENV CXXFLAGS="-std=c++20 -fexceptions"
 ENV CXX="g++ -std=c++20 -fexceptions"
+
 # Set the working directory
 WORKDIR /usr/src/service
 
 # Copy the rest of app's source code
 COPY . .
 
-# Install dependencies with exception handling enabled
-RUN pnpm install --force && pnpm store prune && rm -rf ~/.pnpm-store
 # Install dependencies
-# CXXFLAGS="-fexceptions" added to make 
-# RUN CXXFLAGS="-std=c++20 -fexceptions" pnpm install --force && pnpm store prune && rm -rf ~/.pnpm-store
+RUN pnpm install --force && pnpm store prune && rm -rf ~/.pnpm-store
 
-# First ensure tsup is available at the root level
-# RUN pnpm add -D tsup typescript ts-node @types/node
-
-# Build the demo
-# WORKDIR /usr/src/service/demo/svelte-demo
-# RUN pnpm install --force
-# # Install ts-node in the demo directory as well
-# RUN pnpm add -D ts-node @types/node typescript
-# RUN pnpm run build
-
+# Build the Svelte demo
+WORKDIR /usr/src/service/demo/svelte-demo
+RUN pnpm install --force
+RUN pnpm run build
 WORKDIR /usr/src/service
 
 # Run the application
