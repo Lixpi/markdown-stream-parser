@@ -1407,8 +1407,7 @@ export class MarkdownStreamParser {
             return extractedText;
         }
 
-        // Fallback: strip leading # markers and whitespace
-        return content.replace(/^#{1,6}\s*/, '');
+        throw new Error('Tree-sitter node required for header content extraction');
     }
 
     private getCodeBlockContent(content: string, node?: Parser.SyntaxNode, startByte?: number, endByte?: number): string {
@@ -1438,8 +1437,7 @@ export class MarkdownStreamParser {
             return extractedText;
         }
 
-        // Fallback: strip ``` markers
-        return content.replace(/^```[a-z]*\n?/, '').replace(/```\s*$/, '');
+        throw new Error('Tree-sitter node required for code block content extraction');
     }
 
     private getInlineCodeSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
@@ -1449,26 +1447,7 @@ export class MarkdownStreamParser {
 
         // Find the inline node that contains this position from the main tree
         if (!this.currentTree) {
-            // Fallback: strip backticks and return single segment
-            const styles = [...baseStyles];
-            if (styles.indexOf('code') === -1) styles.push('code');
-
-            const processed = content.replace(/^`/, '').replace(/`$/, '');
-            if (!processed) return [];
-
-            return [{
-                status: "STREAMING",
-                segment: {
-                    segment: processed,
-                    styles: styles,
-                    type: blockInfo.type,
-                    isBlockDefining: false,
-                    isProcessingNewLine: processed.includes('\n'),
-                    ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                    ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                    ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-                }
-            }];
+            throw new Error('Tree-sitter tree required for inline code segment extraction');
         }
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
@@ -1590,24 +1569,7 @@ export class MarkdownStreamParser {
             }
         }
 
-        // Fallback if no overlap found or error or no split needed (though style said code)
-        // Treat as code if style says so, but strip backticks
-        const processed = content.replace(/^`/, '').replace(/`$/, '');
-        if (!processed) return [];
-
-        return [{
-            status: "STREAMING",
-            segment: {
-                segment: processed,
-                styles: baseStyles,
-                type: blockInfo.type,
-                isBlockDefining: false,
-                isProcessingNewLine: processed.includes('\n'),
-                ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-            }
-        }];
+        throw new Error('Tree-sitter inline node required for inline code segment extraction');
     }
 
     private getBoldSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
@@ -1617,26 +1579,7 @@ export class MarkdownStreamParser {
 
         // Find the inline node that contains this position from the main tree
         if (!this.currentTree) {
-            // Fallback: strip ** and return single segment
-            const styles = [...baseStyles];
-            if (styles.indexOf('bold') === -1) styles.push('bold');
-
-            const processed = content.replace(/^\*\*/, '').replace(/\*\*$/, '');
-            if (!processed) return [];
-
-            return [{
-                status: "STREAMING",
-                segment: {
-                    segment: processed,
-                    styles: styles,
-                    type: blockInfo.type,
-                    isBlockDefining: false,
-                    isProcessingNewLine: processed.includes('\n'),
-                    ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                    ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                    ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-                }
-            }];
+            throw new Error('Tree-sitter tree required for bold segment extraction');
         }
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
@@ -1755,24 +1698,7 @@ export class MarkdownStreamParser {
             }
         }
 
-        // Fallback if no overlap found or error or no split needed
-        // Strip ** markers and return
-        const processed = content.replace(/^\*\*/, '').replace(/\*\*$/, '');
-        if (!processed) return [];
-
-        return [{
-            status: "STREAMING",
-            segment: {
-                segment: processed,
-                styles: baseStyles,
-                type: blockInfo.type,
-                isBlockDefining: false,
-                isProcessingNewLine: processed.includes('\n'),
-                ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-            }
-        }];
+        throw new Error('Tree-sitter inline node required for bold segment extraction');
     }
 
     private getItalicSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
@@ -1782,27 +1708,7 @@ export class MarkdownStreamParser {
 
         // Find the inline node that contains this position from the main tree
         if (!this.currentTree) {
-            // Fallback: strip * or _ and return single segment
-            const styles = [...baseStyles];
-            if (styles.indexOf('italic') === -1) styles.push('italic');
-
-            // Strip surrounding * or _
-            const processed = content.replace(/^[*_]/, '').replace(/[*_]$/, '');
-            if (!processed) return [];
-
-            return [{
-                status: "STREAMING",
-                segment: {
-                    segment: processed,
-                    styles: styles,
-                    type: blockInfo.type,
-                    isBlockDefining: false,
-                    isProcessingNewLine: processed.includes('\n'),
-                    ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                    ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                    ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-                }
-            }];
+            throw new Error('Tree-sitter tree required for italic segment extraction');
         }
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
@@ -1911,23 +1817,7 @@ export class MarkdownStreamParser {
             }
         }
 
-        // Fallback
-        const processed = content.replace(/^[*_]/, '').replace(/[*_]$/, '');
-        if (!processed) return [];
-
-        return [{
-            status: "STREAMING",
-            segment: {
-                segment: processed,
-                styles: baseStyles,
-                type: blockInfo.type,
-                isBlockDefining: false,
-                isProcessingNewLine: processed.includes('\n'),
-                ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-            }
-        }];
+        throw new Error('Tree-sitter inline node required for italic segment extraction');
     }
 
     private getStrikethroughSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
@@ -1937,27 +1827,7 @@ export class MarkdownStreamParser {
 
         // Find the inline node that contains this position from the main tree
         if (!this.currentTree) {
-            // Fallback: strip ~~ and return single segment
-            const styles = [...baseStyles];
-            if (styles.indexOf('strikethrough') === -1) styles.push('strikethrough');
-
-            // Strip surrounding ~~
-            const processed = content.replace(/^~~/, '').replace(/~~$/, '');
-            if (!processed) return [];
-
-            return [{
-                status: "STREAMING",
-                segment: {
-                    segment: processed,
-                    styles: styles,
-                    type: blockInfo.type,
-                    isBlockDefining: false,
-                    isProcessingNewLine: processed.includes('\n'),
-                    ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                    ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                    ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-                }
-            }];
+            throw new Error('Tree-sitter tree required for strikethrough segment extraction');
         }
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
@@ -2076,23 +1946,7 @@ export class MarkdownStreamParser {
             }
         }
 
-        // Fallback
-        const processed = content.replace(/^~~/, '').replace(/~~$/, '');
-        if (!processed) return [];
-
-        return [{
-            status: "STREAMING",
-            segment: {
-                segment: processed,
-                styles: baseStyles,
-                type: blockInfo.type,
-                isBlockDefining: false,
-                isProcessingNewLine: processed.includes('\n'),
-                ...(blockInfo.level !== undefined && { level: blockInfo.level }),
-                ...(blockInfo.language !== undefined && { language: blockInfo.language }),
-                ...(blockInfo.id !== undefined && { blockId: blockInfo.id })
-            }
-        }];
+        throw new Error('Tree-sitter inline node required for strikethrough segment extraction');
     }
 
     getCurrentContent(): string {
