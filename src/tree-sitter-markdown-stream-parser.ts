@@ -601,7 +601,7 @@ export class MarkdownStreamParser {
 
                     // Buffer the fence and content after it
                     const contentFromFenceStart = newContent.substring(fenceStart);
-                    console.log(`[DEBUG] Buffering incomplete code block (no close): "${contentFromFenceStart.substring(0, 50)}..."`);
+
                     this.pendingInlineContent = contentFromFenceStart;
                     this.pendingInlineStartIndex = positionOfFence;
                     return segments;
@@ -639,7 +639,7 @@ export class MarkdownStreamParser {
 
                     // Emit as code block
                     if (codeContent.length > 0) {
-                        console.log(`[DEBUG] Detected code fence in paragraph, reclassifying: "${codeContent.substring(0, 30)}..."`);
+
 
                         segments.push({
                             status: "STREAMING",
@@ -689,7 +689,7 @@ export class MarkdownStreamParser {
 
                 if (closingFenceIdx === -1) {
                     // No closing fence - emit as code block content
-                    console.log(`[DEBUG] Content inside code block: "${newContent.substring(0, 30)}..."`);
+
                     return [{
                         status: "STREAMING",
                         segment: {
@@ -1307,7 +1307,7 @@ export class MarkdownStreamParser {
         const styles: Set<string> = new Set();
         let current: Parser.SyntaxNode | null = node;
 
-        console.log(`[STYLE] Detecting for ${startIdx}-${endIdx}, starting node: ${node.type}(${node.startIndex}-${node.endIndex})`);
+
 
         // First, find the inline node from the BLOCK tree (not the inline tree)
         // to get document-relative positions
@@ -1317,8 +1317,7 @@ export class MarkdownStreamParser {
                 const inlineContent = blockInlineNode.text;
                 const inlineTree = this.inlineParser.parse(inlineContent);
 
-                console.log(`[STYLE] inline content: "${inlineContent}"`);
-                console.log(`[STYLE] inline tree: ${inlineTree?.rootNode.toString()}`);
+
 
                 if (inlineTree) {
                     // Calculate relative position within the inline content
@@ -1363,7 +1362,7 @@ export class MarkdownStreamParser {
 
         // Walk up the block tree for block-level styles
         while (current) {
-            console.log(`[STYLE] Checking node: ${current.type}(${current.startIndex}-${current.endIndex})`);
+
             if (current.type === 'strong_emphasis' || current.type === 'strong') {
                 styles.add('bold');
             } else if (current.type === 'emphasis' || current.type === 'em') {
@@ -1480,7 +1479,7 @@ export class MarkdownStreamParser {
     }
 
     private getInlineCodeSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
-        console.log(`[GETCODE] content="${content}", startByte=${startByte}, endByte=${endByte}`);
+
 
         const segments: StreamingChunk[] = [];
 
@@ -1491,7 +1490,7 @@ export class MarkdownStreamParser {
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
 
-        console.log(`[GETCODE] inlineNode: ${inlineNode?.type}, range: ${inlineNode?.startIndex}-${inlineNode?.endIndex}`);
+
 
         // Check for both 'inline' and 'pipe_table_cell'
         if (inlineNode && (inlineNode.type === 'inline' || inlineNode.type === 'pipe_table_cell') && this.inlineParser) {
@@ -1501,7 +1500,7 @@ export class MarkdownStreamParser {
             const relativeStart = startByte - inlineNode.startIndex;
             const relativeEnd = endByte - inlineNode.startIndex;
 
-            console.log(`[GETCODE] inlineContent="${inlineContent}", relativeStart=${relativeStart}, relativeEnd=${relativeEnd}`);
+
 
             const codeSpans = inlineTree.rootNode.descendantsOfType('code_span');
 
@@ -1612,7 +1611,7 @@ export class MarkdownStreamParser {
     }
 
     private getBoldSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
-        console.log(`[GETBOLD] content="${content}", startByte=${startByte}, endByte=${endByte}`);
+
 
         const segments: StreamingChunk[] = [];
 
@@ -1623,7 +1622,7 @@ export class MarkdownStreamParser {
 
         const inlineNode = this.findInlineNodeAtPosition(this.currentTree.rootNode, startByte);
 
-        console.log(`[GETBOLD] inlineNode: ${inlineNode?.type}, range: ${inlineNode?.startIndex}-${inlineNode?.endIndex}`);
+
 
         // Check for both 'inline' and 'pipe_table_cell'
         if (inlineNode && (inlineNode.type === 'inline' || inlineNode.type === 'pipe_table_cell') && this.inlineParser) {
@@ -1633,7 +1632,7 @@ export class MarkdownStreamParser {
             const relativeStart = startByte - inlineNode.startIndex;
             const relativeEnd = endByte - inlineNode.startIndex;
 
-            console.log(`[GETBOLD] inlineContent="${inlineContent}", relativeStart=${relativeStart}, relativeEnd=${relativeEnd}`);
+
 
             const strongNodes = inlineTree.rootNode.descendantsOfType('strong_emphasis');
 
@@ -1644,7 +1643,7 @@ export class MarkdownStreamParser {
                     // Find emphasis_delimiter children (the ** markers)
                     const delimiters = strongNode.children.filter((c: Parser.SyntaxNode) => c.type === 'emphasis_delimiter');
 
-                    console.log(`[GETBOLD] strongNode: ${strongNode.startIndex}-${strongNode.endIndex}, delimiters: ${delimiters.length}`);
+
 
                     // For bold (**), we need at least 4 delimiters (2 pairs of *)
                     if (delimiters.length >= 4) {
@@ -1652,7 +1651,7 @@ export class MarkdownStreamParser {
                         const openingEnd = delimiters[1].endIndex;
                         const closingStart = delimiters[delimiters.length - 2].startIndex;
 
-                        console.log(`[GETBOLD] openingEnd=${openingEnd}, closingStart=${closingStart}`);
+
 
                         // 1. Prefix (Text before bold span)
                         if (strongNode.startIndex > relativeStart) {
@@ -1741,7 +1740,7 @@ export class MarkdownStreamParser {
     }
 
     private getItalicSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
-        console.log(`[GETITALIC] content="${content}", startByte=${startByte}, endByte=${endByte}`);
+
 
         const segments: StreamingChunk[] = [];
 
@@ -1860,7 +1859,7 @@ export class MarkdownStreamParser {
     }
 
     private getStrikethroughSegments(content: string, node: Parser.SyntaxNode, startByte: number, endByte: number, baseStyles: string[], blockInfo: any): StreamingChunk[] {
-        console.log(`[GETSTRIKETHROUGH] content="${content}", startByte=${startByte}, endByte=${endByte}`);
+
 
         const segments: StreamingChunk[] = [];
 
@@ -1890,10 +1889,7 @@ export class MarkdownStreamParser {
                     const delimiters = strikethroughNode.descendantsOfType('emphasis_delimiter')
                         .sort((a: Parser.SyntaxNode, b: Parser.SyntaxNode) => a.startIndex - b.startIndex);
 
-                    console.log(`[GETSTRIKETHROUGH] strikethroughNode: ${strikethroughNode.startIndex}-${strikethroughNode.endIndex}, delimiters: ${delimiters.length}`);
-                    delimiters.forEach((d: Parser.SyntaxNode, i: number) => {
-                        console.log(`[GETSTRIKETHROUGH]   delimiter ${i}: ${d.startIndex}-${d.endIndex} "${d.text}"`);
-                    });
+
 
                     // For strikethrough (~~), we need at least 4 delimiters (2 pairs of ~)
                     if (delimiters.length >= 4) {
@@ -1901,7 +1897,7 @@ export class MarkdownStreamParser {
                         const openingEnd = delimiters[1].endIndex;
                         const closingStart = delimiters[delimiters.length - 2].startIndex;
 
-                        console.log(`[GETSTRIKETHROUGH] openingEnd=${openingEnd}, closingStart=${closingStart}`);
+
 
                         // 1. Prefix (Text before strikethrough span)
                         if (strikethroughNode.startIndex > relativeStart) {

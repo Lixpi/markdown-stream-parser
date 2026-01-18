@@ -581,9 +581,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       const rawSegments = parsedSegments.filter(s => s.segment === '`code`')
 
       // Should have stripped backticks
-      if (rawSegments.length > 0) {
-        console.log('Failed: Found unstripped code segment:', rawSegments[0])
-      }
+
 
       expect(rawSegments.length).toBe(0)
       expect(cellSegments.length).toBeGreaterThan(0)
@@ -600,8 +598,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       const tableSegments = parsedSegments.filter(s =>
         s.type === 'table_header_cell' || s.type === 'table_cell' || s.type === 'table'
       )
-      console.log('Table segments:', tableSegments)
-      console.log('All segments:', parsedSegments)
+
 
       expect(tableSegments.length).toBeGreaterThan(0)
     })
@@ -614,7 +611,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
 
       // Should NOT have any segments that are just '|' or '| '
       const pipeSegments = parsedSegments.filter(s => /^\|[\s]*$/.test(s.segment))
-      console.log('Pipe segments (should be empty):', pipeSegments)
+
 
       expect(pipeSegments.length).toBe(0)
     })
@@ -627,7 +624,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
 
       // Should NOT have any segments containing '---'
       const delimiterSegments = parsedSegments.filter(s => s.segment.includes('---'))
-      console.log('Delimiter segments (should be empty):', delimiterSegments)
+
 
       expect(delimiterSegments.length).toBe(0)
     })
@@ -640,7 +637,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
 
       // Should have code segment with proper style
       const codeSegments = parsedSegments.filter(s => s.styles && s.styles.includes('code'))
-      console.log('Code segments:', codeSegments)
+
 
       expect(codeSegments.length).toBeGreaterThan(0)
       // Code should be stripped of backticks
