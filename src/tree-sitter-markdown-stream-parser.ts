@@ -477,7 +477,6 @@ export class MarkdownStreamParser {
             '|'  // Table pipe delimiters
         ];
         if (suppressedSyntaxTypes.indexOf(nodeAtPosition.type) !== -1) {
-            console.log(`[DEBUG] Suppressing syntax marker: "${newContent}"`);
             return segments; // Don't emit syntax markers
         }
 
@@ -486,7 +485,6 @@ export class MarkdownStreamParser {
         while (currentForDelimiter) {
             if (currentForDelimiter.type === 'pipe_table_delimiter_row' ||
                 currentForDelimiter.type === 'pipe_table_delimiter_cell') {
-                console.log(`[DEBUG] Suppressing table delimiter: "${newContent}"`);
                 return segments; // Don't emit table delimiter content
             }
             currentForDelimiter = currentForDelimiter.parent;
@@ -501,14 +499,19 @@ export class MarkdownStreamParser {
         // Detect styles in the current context
         const styles = this.detectActiveStyles(nodeAtPosition, actualFromIndex, actualToIndex);
 
-        console.log(`[DEBUG] Content: "${newContent}", styles: [${styles.join(',')}], block: ${blockInfo.type}`);
+
 
         // Process content based on block type
         let processedContent = newContent;
         if (blockInfo.type === 'header') {
             // Strip header markers from content using tree-sitter node
             const blockNode = this.findBlockNode(nodeAtPosition);
-            processedContent = this.getHeaderContent(newContent, blockNode || undefined, actualFromIndex, actualToIndex);
+            try {
+                processedContent = this.getHeaderContent(newContent, blockNode || undefined, actualFromIndex, actualToIndex);
+            } catch (e) {
+                console.warn('[PARSER] Failed to extract header content, using raw:', e);
+                processedContent = newContent; // Fallback to raw content
+            }
 
             // Don't emit if it's only markers (no actual content)
             if (processedContent.length === 0 || processedContent.trim().length === 0) {
@@ -531,7 +534,12 @@ export class MarkdownStreamParser {
         } else if (blockInfo.type === 'codeBlock') {
             // Strip code fence markers (```) from code block content
             const blockNode = this.findBlockNode(nodeAtPosition);
-            processedContent = this.getCodeBlockContent(newContent, blockNode || undefined, actualFromIndex, actualToIndex);
+            try {
+                processedContent = this.getCodeBlockContent(newContent, blockNode || undefined, actualFromIndex, actualToIndex);
+            } catch (e) {
+                console.warn('[PARSER] Failed to extract code block content, using raw:', e);
+                processedContent = newContent; // Fallback to raw content
+            }
 
             // Don't emit if it's only fence markers
             if (processedContent.length === 0) {
@@ -737,7 +745,13 @@ export class MarkdownStreamParser {
         if (blockInfo.type !== 'codeBlock') {
             if (styles.indexOf('code') !== -1) {
                 // Strip inline code backticks and potentially split into multiple segments (for prefix/suffix)
-                const splitSegments = this.getInlineCodeSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                let splitSegments: StreamingChunk[] = [];
+                try {
+                    splitSegments = this.getInlineCodeSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                } catch (e) {
+                    console.warn('[PARSER] Failed to extract inline code segments, will use default processing:', e);
+                    // Fall through to default segment processing below
+                }
 
                 if (splitSegments.length > 0) {
                     // Determine if this block is defining based on whether we've emitted content for it yet
@@ -774,7 +788,13 @@ export class MarkdownStreamParser {
                 }
             } else if (styles.indexOf('bold') !== -1) {
                 // Strip bold asterisks and potentially split into multiple segments (for prefix/suffix)
-                const splitSegments = this.getBoldSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                let splitSegments: StreamingChunk[] = [];
+                try {
+                    splitSegments = this.getBoldSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                } catch (e) {
+                    console.warn('[PARSER] Failed to extract bold segments, will use default processing:', e);
+                    // Fall through to default segment processing below
+                }
 
                 if (splitSegments.length > 0) {
                     // Determine if this block is defining based on whether we've emitted content for it yet
@@ -811,7 +831,13 @@ export class MarkdownStreamParser {
                 }
             } else if (styles.indexOf('italic') !== -1) {
                 // Strip italic asterisks/underscores and potentially split into multiple segments
-                const splitSegments = this.getItalicSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                let splitSegments: StreamingChunk[] = [];
+                try {
+                    splitSegments = this.getItalicSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                } catch (e) {
+                    console.warn('[PARSER] Failed to extract italic segments, will use default processing:', e);
+                    // Fall through to default segment processing below
+                }
 
                 if (splitSegments.length > 0) {
                     // Determine if this block is defining based on whether we've emitted content for it yet
@@ -848,7 +874,13 @@ export class MarkdownStreamParser {
                 }
             } else if (styles.indexOf('strikethrough') !== -1) {
                 // Strip strikethrough markers and potentially split into multiple segments
-                const splitSegments = this.getStrikethroughSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                let splitSegments: StreamingChunk[] = [];
+                try {
+                    splitSegments = this.getStrikethroughSegments(processedContent, nodeAtPosition, actualFromIndex, actualToIndex, styles, blockInfo);
+                } catch (e) {
+                    console.warn('[PARSER] Failed to extract strikethrough segments, will use default processing:', e);
+                    // Fall through to default segment processing below
+                }
 
                 if (splitSegments.length > 0) {
                     // Determine if this block is defining based on whether we've emitted content for it yet
@@ -1039,6 +1071,12 @@ export class MarkdownStreamParser {
                             continue;
                         }
 
+                        // If this * is adjacent to /, it's part of /* or */ (comment delimiters), skip it
+                        // These are NOT italic markers but likely code comment syntax
+                        if (prevChar === '/' || nextChar === '/') {
+                            continue;
+                        }
+
                         // This is a lone *, check if it's inside any emphasis or strong_emphasis node
                         if (!isInsideMatchedNode(i)) {
                             return true;
@@ -1063,8 +1101,9 @@ export class MarkdownStreamParser {
             if (char === '*') {
                 const prevChar = i > 0 ? text[i - 1] : '';
                 const nextChar = i < text.length - 1 ? text[i + 1] : '';
-                if (prevChar !== '*' && nextChar !== '*') {
-                    return true; // Lone asterisk found
+                // Skip if part of ** or adjacent to / (comment delimiters)
+                if (prevChar !== '*' && nextChar !== '*' && prevChar !== '/' && nextChar !== '/') {
+                    return true; // Lone asterisk found (not in **, /*, or */)
                 }
             } else if (char === '_') {
                 return true; // Underscore found
