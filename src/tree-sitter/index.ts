@@ -6,7 +6,7 @@ export type {
     BlockInfo,
     InlineExtractionContext,
     InlineStyleConfig,
-} from './types.js';
+} from './types.js'
 
 // Constants (runtime exports)
 export {
@@ -14,7 +14,7 @@ export {
     BLOCK_TYPES,
     SUPPRESSED_SYNTAX_TYPES,
     INLINE_STYLE_CONFIGS,
-} from './types.js';
+} from './types.js'
 
 // Tree navigation
 export {
@@ -22,7 +22,7 @@ export {
     findNodeInTree,
     findInlineNodeAtPosition,
     findBlockNode,
-} from './tree-navigation.js';
+} from './tree-navigation.js'
 
 // Block detection
 export {
@@ -30,7 +30,7 @@ export {
     isNewBlock,
     getHeadingLevel,
     getCodeBlockLanguage,
-} from './block-detection.js';
+} from './block-detection.js'
 
 // Inline detection
 export {
@@ -41,13 +41,13 @@ export {
     hasUnmatchedItalicMarker,
     isInsideCodeBlock,
     detectActiveStyles,
-} from './inline-detection.js';
+} from './inline-detection.js'
 
 // Content extraction
 export {
     getHeaderContent,
     getCodeBlockContent,
-} from './content-extraction.js';
+} from './content-extraction.js'
 
 // Segment builder
 export {
@@ -57,7 +57,7 @@ export {
     createChunkFromBlockInfo,
     createPlainTextChunk,
     createCodeBlockChunk,
-} from './segment-builder.js';
+} from './segment-builder.js'
 
 // Inline extractors
 export {
@@ -65,8 +65,8 @@ export {
     getBoldSegments,
     getItalicSegments,
     getStrikethroughSegments,
-} from './inline-extractors.js';
+} from './inline-extractors.js'
 
 // Segment generator
-export { generateSegments } from './segment-generator.js';
-export type { SegmentGeneratorState, SegmentGeneratorContext } from './segment-generator.js';
+export { generateSegments } from './segment-generator.js'
+export type { SegmentGeneratorState, SegmentGeneratorContext } from './segment-generator.js'

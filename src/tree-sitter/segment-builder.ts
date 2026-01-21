@@ -1,8 +1,6 @@
-import type { StreamingChunk, StreamingSegment, BlockInfo } from './types.js';
+import type { StreamingChunk, StreamingSegment, BlockInfo } from './types.js'
 
-/**
- * Create a StreamingSegment with consistent defaults.
- */
+// Create a StreamingSegment with consistent defaults.
 export function createSegment(
     segment: string,
     styles: string[],
@@ -10,9 +8,9 @@ export function createSegment(
     isBlockDefining: boolean,
     isProcessingNewLine: boolean,
     options?: {
-        level?: number;
-        language?: string;
-        blockId?: number;
+        level?: number
+        language?: string
+        blockId?: number
     }
 ): StreamingSegment {
     const result: StreamingSegment = {
@@ -21,34 +19,30 @@ export function createSegment(
         type,
         isBlockDefining,
         isProcessingNewLine,
-    };
+    }
 
     if (options?.level !== undefined) {
-        result.level = options.level;
+        result.level = options.level
     }
     if (options?.language !== undefined) {
-        result.language = options.language;
+        result.language = options.language
     }
     if (options?.blockId !== undefined) {
-        result.blockId = options.blockId;
+        result.blockId = options.blockId
     }
 
-    return result;
+    return result
 }
 
-/**
- * Create a StreamingChunk with STREAMING status.
- */
+// Create a StreamingChunk with STREAMING status.
 export function createStreamingChunk(segment: StreamingSegment): StreamingChunk {
     return {
         status: 'STREAMING',
         segment,
-    };
+    }
 }
 
-/**
- * Create a segment from block info with common patterns.
- */
+// Create a segment from block info with common patterns.
 export function createSegmentFromBlockInfo(
     text: string,
     styles: string[],
@@ -67,12 +61,10 @@ export function createSegmentFromBlockInfo(
             language: blockInfo.language,
             blockId: blockInfo.id,
         }
-    );
+    )
 }
 
-/**
- * Create a streaming chunk from block info.
- */
+// Create a streaming chunk from block info.
 export function createChunkFromBlockInfo(
     text: string,
     styles: string[],
@@ -82,12 +74,10 @@ export function createChunkFromBlockInfo(
 ): StreamingChunk {
     return createStreamingChunk(
         createSegmentFromBlockInfo(text, styles, blockInfo, isBlockDefining, isProcessingNewLine)
-    );
+    )
 }
 
-/**
- * Create a plain text paragraph segment.
- */
+// Create a plain text paragraph segment.
 export function createPlainTextChunk(text: string, isBlockDefining: boolean = false): StreamingChunk {
     return createStreamingChunk({
         segment: text,
@@ -95,12 +85,10 @@ export function createPlainTextChunk(text: string, isBlockDefining: boolean = fa
         type: 'paragraph',
         isBlockDefining,
         isProcessingNewLine: text.includes('\n'),
-    });
+    })
 }
 
-/**
- * Create a code block segment.
- */
+// Create a code block segment.
 export function createCodeBlockChunk(
     text: string,
     language: string = '',
@@ -113,5 +101,5 @@ export function createCodeBlockChunk(
         isBlockDefining,
         isProcessingNewLine: text.includes('\n'),
         language,
-    });
+    })
 }

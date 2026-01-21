@@ -2,7 +2,7 @@
 
 A library designed to incrementally parse Markdown text from a stream of tokens.
 
-It's built to handle the ambiguities of LLM-generated streams, which often produce imperfect or invalid Markdown.It uses **tree-sitter** under the hood. Instead of regex pattern matching, we get a proper AST that tells us exactly what's a header, what's a code block, what's bold text, etc. Tree-sitter's error recovery also handles the imperfect markdown that LLMs tend to produce.
+It uses **tree-sitter** under the hood. Instead of regex pattern matching, we get a proper AST that tells us exactly what's a header, what's a code block, what's bold text, etc. Tree-sitter's error recovery also handles the imperfect markdown that LLMs tend to produce.
 
 ### ⚠️ ***This project is still in active development - there are bugs and missing features.***
 
@@ -275,44 +275,176 @@ The project includes comprehensive test coverage with 187 tests across all core 
 
 The parser uses **tree-sitter** for AST-based parsing. Instead of trying to match patterns with regex, we let tree-sitter build a syntax tree and then walk it to extract the content we need.
 
-Here's the general flow:
+### High-Level Data Flow
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'secondaryTextColor': '#1a3a47', 'secondaryBorderColor': '#4a8a9d', 'tertiaryColor': '#DCECE9', 'tertiaryTextColor': '#1a3a47', 'tertiaryBorderColor': '#82B2C0', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
 flowchart LR
-    A[Token] --> B[TokensStreamBuffer]
+    A[LLM Token] --> B[TokensStreamBuffer]
     B --> C[Accumulate Content]
     C --> D[Tree-sitter Parse]
     D --> E[AST Traversal]
     E --> F[Emit Segments]
+    F --> G[Subscribers]
 ```
+
+### Module Architecture
+
+The tree-sitter parsing logic is split into focused modules:
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'secondaryTextColor': '#1a3a47', 'secondaryBorderColor': '#4a8a9d', 'tertiaryColor': '#DCECE9', 'tertiaryTextColor': '#1a3a47', 'tertiaryBorderColor': '#82B2C0', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
+graph TB
+    subgraph "Entry Point"
+        Parser[MarkdownStreamParser]
+    end
+
+    subgraph "Tree-sitter Modules"
+        SG[segment-generator.ts]
+        BD[block-detection.ts]
+        ID[inline-detection.ts]
+        CE[content-extraction.ts]
+        IE[inline-extractors.ts]
+        TN[tree-navigation.ts]
+        SB[segment-builder.ts]
+    end
+
+    subgraph "External"
+        TS[(web-tree-sitter)]
+        MD[(tree-sitter-markdown)]
+        MDI[(tree-sitter-markdown-inline)]
+    end
+
+    Parser --> SG
+    SG --> BD
+    SG --> ID
+    SG --> CE
+    SG --> IE
+    BD --> TN
+    ID --> TN
+    IE --> SB
+    CE --> TS
+    BD --> TS
+    ID --> TS
+    TS --> MD
+    TS --> MDI
+```
+
+| Module | Responsibility |
+|--------|----------------|
+| `segment-generator.ts` | Main orchestrator - generates segments from content ranges |
+| `block-detection.ts` | Figures out block type (header, paragraph, code block, list, table) |
+| `inline-detection.ts` | Detects active inline styles (bold, italic, code, strikethrough) |
+| `content-extraction.ts` | Strips markdown syntax and extracts clean content |
+| `inline-extractors.ts` | Extracts styled segments with proper marker stripping |
+| `tree-navigation.ts` | AST traversal utilities |
+| `segment-builder.ts` | Creates segment objects with consistent structure |
+
+### Parser API Flow
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'noteBkgColor': '#82B2C0', 'noteTextColor': '#1a3a47', 'noteBorderColor': '#5a9aad', 'actorBkg': '#F6C7B3', 'actorBorder': '#d4956a', 'actorTextColor': '#5a3a2a', 'actorLineColor': '#d4956a', 'signalColor': '#d4956a', 'signalTextColor': '#5a3a2a', 'labelBoxBkgColor': '#F6C7B3', 'labelBoxBorderColor': '#d4956a', 'labelTextColor': '#5a3a2a', 'loopTextColor': '#5a3a2a', 'activationBorderColor': '#d4956a', 'activationBkgColor': '#C3DEDD', 'sequenceNumberColor': '#5a3a2a'}}}%%
+sequenceDiagram
+    participant App as Your App
+    participant Parser as MarkdownStreamParser
+    participant Buffer as TokensStreamBuffer
+    participant TS as Tree-sitter
+    participant Gen as SegmentGenerator
+
+    rect rgb(220, 236, 233)
+        Note over App, Gen: Setup Phase
+        App->>Parser: getInstance(sessionId)
+        activate Parser
+        Parser->>TS: load WASM grammars
+        Parser-->>App: parser instance
+    end
+
+    rect rgb(195, 222, 221)
+        Note over App, Gen: Subscription Phase
+        App->>Parser: subscribeToTokenParse(listener)
+        App->>Parser: startParsing()
+        Parser-->>App: START_STREAM event
+    end
+
+    rect rgb(246, 199, 179)
+        Note over App, Gen: Streaming Phase
+        loop For each LLM token
+            App->>Parser: parseToken(chunk)
+            Parser->>Buffer: receiveChunk(chunk)
+            Buffer->>Parser: segment ready
+            Parser->>TS: parse(content)
+            TS-->>Parser: AST
+            Parser->>Gen: generateSegments(range)
+            Gen-->>Parser: StreamingChunk[]
+            Parser-->>App: notify(segment)
+        end
+    end
+
+    rect rgb(242, 234, 224)
+        Note over App, Gen: Cleanup Phase
+        App->>Parser: stopParsing()
+        Parser->>Buffer: flushBuffer()
+        Parser-->>App: END_STREAM event
+        deactivate Parser
+        App->>Parser: removeInstance(sessionId)
+    end
+```
+
+### Parser State Transitions
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
+stateDiagram-v2
+    [*] --> Idle: getInstance()
+
+    Idle --> Parsing: startParsing()
+    
+    state Parsing {
+        [*] --> AwaitingToken
+        
+        AwaitingToken --> ProcessingChunk: parseToken(chunk)
+        ProcessingChunk --> DetectingBlock: tree-sitter parse
+        DetectingBlock --> ProcessingHeader: atx_heading found
+        DetectingBlock --> ProcessingParagraph: paragraph found
+        DetectingBlock --> ProcessingCodeBlock: fenced_code_block found
+        DetectingBlock --> ProcessingList: list_item found
+        DetectingBlock --> ProcessingTable: pipe_table found
+        
+        ProcessingHeader --> DetectingInline: check inline styles
+        ProcessingParagraph --> DetectingInline: check inline styles
+        ProcessingList --> DetectingInline: check inline styles
+        ProcessingTable --> DetectingInline: check inline styles
+        
+        DetectingInline --> BufferingIncomplete: unmatched delimiter
+        DetectingInline --> EmitSegment: style complete
+        BufferingIncomplete --> AwaitingToken: wait for more
+        
+        ProcessingCodeBlock --> EmitSegment: extract content
+        EmitSegment --> AwaitingToken: notify subscribers
+    }
+    
+    Parsing --> Flushing: stopParsing()
+    Flushing --> Idle: END_STREAM
+    Idle --> [*]: removeInstance()
+```
+
+### How Content Gets Processed
 
 #### 1. Token Buffering
 
 Incoming tokens are accumulated in a `TokensStreamBuffer`. This gives us enough context to parse meaningful chunks rather than character-by-character.
 
-#### 2. AST-Based Parsing with Tree-sitter
+#### 2. AST-Based Parsing
 
-The core parsing is done by `web-tree-sitter` with the `tree-sitter-markdown` grammar. When content comes in, we parse it and get an AST that tells us exactly what we're dealing with - headers, paragraphs, code blocks, lists, bold text, whatever.
+The core parsing is done by `web-tree-sitter` with the `tree-sitter-markdown` grammar. When content comes in, we parse it and get an AST that tells us exactly what we're dealing with - headers, paragraphs, code blocks, lists, bold text, etc.
 
-The nice thing about tree-sitter is that it handles incomplete/malformed markdown gracefully. It uses error recovery and can still produce a usable tree even when the input is partial or slightly broken (which happens constantly with LLM streams).
+Tree-sitter handles incomplete/malformed markdown gracefully. It uses error recovery and can still produce a usable tree even when the input is partial or slightly broken (which happens constantly with LLM streams).
 
-#### 3. Modular Architecture
-
-The tree-sitter parsing logic is split into focused modules:
-
-- **`block-detection.ts`** - Figures out what type of block we're in (header, paragraph, code block, list item, blockquote, table)
-- **`inline-detection.ts`** - Detects active inline styles (bold, italic, code spans, strikethrough) by examining AST nodes
-- **`content-extraction.ts`** - Strips markdown syntax (like `#` from headers or ``` from code blocks) and extracts clean content
-- **`inline-extractors.ts`** - Specialized extractors for each inline style that properly strip markers and apply styles
-- **`segment-generator.ts`** - Orchestrates everything and produces the final segments
-
-Each module does one thing, which makes the code easier to reason about and test.
-
-#### 4. Handling Incomplete Inline Markers
+#### 3. Handling Incomplete Inline Markers
 
 A tricky problem with streaming is that inline markers can arrive split across chunks. For example, you might get `**hello` in one chunk and `**` in the next.
 
-The parser buffers content when it detects an unmatched delimiter. It uses tree-sitter to check whether a marker is complete:
+The parser buffers content when it detects an unmatched delimiter:
 
 ```typescript
 // Check for unmatched backtick
@@ -327,32 +459,17 @@ if (newPortion.includes('`')) {
 
 This applies to inline code, bold (`**`), italic (`*` or `_`), and strikethrough (`~~`).
 
-#### 5. Inline Parser for Detailed Analysis
+#### 4. Two-Parser Approach
 
 For inline content within blocks, we use a second tree-sitter parser with the `tree-sitter-markdown-inline` grammar. This gives us detailed AST info about emphasis delimiters, code spans, etc.
 
 The two-parser approach (one for block structure, one for inline content) is how tree-sitter-markdown is designed to work. It lets us accurately detect things like whether a `*` is actually an italic marker or just a literal asterisk.
 
-#### 6. Publish/Subscribe Pattern
+### Pub/Sub and Singleton Patterns
 
-The parser uses a pub/sub pattern. You subscribe to get parsed segments as they're ready:
+The parser uses a **publish/subscribe** pattern - you subscribe to get parsed segments as they're ready. Parsing is decoupled from rendering, and multiple subscribers per parser instance are supported.
 
-```mermaid
-flowchart TD
-    A[Input Tokens] -->|buffer| B(TokensStreamBuffer)
-    B -->|raw content| C(Tree-sitter Parser)
-    C -->|AST nodes| D(Segment Generator)
-    D -->|notify| E[Subscribers]
-```
-
-Benefits:
-- Real-time, event-driven processing
-- Parsing is decoupled from rendering
-- Multiple subscribers per parser instance
-
-#### 7. Singleton Pattern
-
-Each logical stream gets its own parser instance via `getInstance(instanceId)`. This allows parallel processing of multiple streams without state conflicts.
+Each logical stream gets its own parser instance via `getInstance(instanceId)` (singleton pattern). This allows parallel processing of multiple streams without state conflicts.
 
 ```typescript
 const parser = await MarkdownStreamParser.getInstance('session-1')
