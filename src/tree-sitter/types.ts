@@ -25,7 +25,7 @@ export const SUPPRESSED_SYNTAX_TYPES = [
 ] as const
 
 // Represents a parsed segment of streaming markdown content
-export interface StreamingSegment {
+export type StreamingSegment = {
     level?: number
     language?: string
     segment: string
@@ -37,13 +37,13 @@ export interface StreamingSegment {
 }
 
 // A chunk of streaming data with status information
-export interface StreamingChunk {
+export type StreamingChunk = {
     status: string
     segment?: StreamingSegment
 }
 
 // Tracks the current block's state during parsing
-export interface BlockState {
+export type BlockState = {
     type: string
     level?: number
     language?: string
@@ -54,7 +54,7 @@ export interface BlockState {
 }
 
 // Information about a block type extracted from the AST
-export interface BlockInfo {
+export type BlockInfo = {
     type: string
     level?: number
     language?: string
@@ -62,7 +62,7 @@ export interface BlockInfo {
 }
 
 // Context passed to inline style extractors
-export interface InlineExtractionContext {
+export type InlineExtractionContext = {
     content: string
     node: Parser.SyntaxNode
     startByte: number
@@ -74,7 +74,7 @@ export interface InlineExtractionContext {
 }
 
 // Configuration for a specific inline style type
-export interface InlineStyleConfig {
+export type InlineStyleConfig = {
     styleName: string
     nodeType: string
     delimiterType: string

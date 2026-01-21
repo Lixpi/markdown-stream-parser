@@ -36,13 +36,13 @@ const SUPPRESSED_SYNTAX_TYPES_LOCAL = [
     '|'  // Table pipe delimiters
 ]
 
-export interface SegmentGeneratorState {
+export type SegmentGeneratorState = {
     pendingInlineContent: string
     pendingInlineStartIndex: number
     currentBlock: BlockState | null
 }
 
-export interface SegmentGeneratorContext {
+export type SegmentGeneratorContext = {
     content: string
     currentTree: Parser.Tree
     inlineParser: Parser | null
