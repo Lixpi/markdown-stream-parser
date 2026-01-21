@@ -83,7 +83,6 @@ export class MarkdownStreamParser {
             MarkdownStreamParser.instances.set(instanceId, instance)
         }
 
-        console.info(`\x1b[34mMarkdownStreamParser ->\x1b[0m getInstance::instanceId: ${instanceId}`)
         return MarkdownStreamParser.instances.get(instanceId)!
     }
 
@@ -122,7 +121,6 @@ export class MarkdownStreamParser {
                 }
             }
 
-            console.info(`Loading markdown WASM from: ${wasmPath}`)
             MarkdownStreamParser.markdownLanguage = await Language.load(wasmPath)
 
             // Load the inline language
@@ -135,12 +133,9 @@ export class MarkdownStreamParser {
                 }
             }
 
-            console.info(`Loading markdown-inline WASM from: ${inlineWasmPath}`)
             MarkdownStreamParser.markdownInlineLanguage = await Language.load(inlineWasmPath)
 
             MarkdownStreamParser.parserInitialized = true
-            console.info('✅ Tree-sitter markdown language loaded successfully')
-            console.info('✅ Tree-sitter markdown-inline language loaded successfully')
         } catch (error) {
             console.error('Failed to load tree-sitter-markdown WASM:', error)
             throw new Error(`Failed to initialize markdown parser: ${error}`)
@@ -193,8 +188,6 @@ export class MarkdownStreamParser {
 
         this.parser.setLanguage(MarkdownStreamParser.markdownLanguage)
         this.inlineParser.setLanguage(MarkdownStreamParser.markdownInlineLanguage)
-
-        console.info('Parser instance initialized with markdown and markdown-inline languages')
     }
 
     /**
@@ -245,7 +238,6 @@ export class MarkdownStreamParser {
         })
 
         this.parsing = true
-        console.info('\x1b[32mParser started\x1b[0m')
     }
 
     /**
@@ -279,7 +271,6 @@ export class MarkdownStreamParser {
         this.notifyTokenParse({ status: 'END_STREAM' })
 
         this.parsing = false
-        console.info('\x1b[32mParser stopped\x1b[0m')
     }
 
     /**

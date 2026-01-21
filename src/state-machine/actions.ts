@@ -141,7 +141,7 @@ const applyInlineTextStyle = (
 
     let parsedSegment = matchObject.content;
 
-    if(!matchObject.postfixedContent) {     // If there's no postfixed content, add a space to the parsed segment
+    if (!matchObject.postfixedContent) {     // If there's no postfixed content, add a space to the parsed segment
         parsedSegment = `${parsedSegment} `;
     }
 
@@ -184,14 +184,6 @@ const setCodeBlock = (
         codeBlockLanguage: matchObject.codeLanguage,
         isBlockDefining: true, // Mark as blockDefining when transitioning to a new block type
     }
-}
-
-const debugParsedSegment = (
-    context: Context,
-    event: ActionEvent,
-    params: ActionParams
-): void => {
-    console.log({origin: params.origin, parsedSegment: context})
 }
 
 const bufferBlockContent = (
@@ -273,8 +265,8 @@ const emitParsedSegment = (
         type: context.blockType,
         isBlockDefining: context.isBlockDefining,
         isProcessingNewLine: context.isProcessingNewLine,
-        ...(isDebug && {content: context.blockContentBuffer}),
-        ...(isDebug && {origin: `${params.origin || null}`}),
+        ...(isDebug && { content: context.blockContentBuffer }),
+        ...(isDebug && { origin: `${params.origin || null}` }),
     }
 
     // Emit parsed segment
@@ -306,8 +298,6 @@ const ACTIONS: Record<string, Function> = {
     'buffer::codeBlockSegments': bufferCodeBlockSegments,
 
     'emit::parsedSegment': emitParsedSegment,
-
-    'debug::parsedSegment': debugParsedSegment,
 }
 
 export const actionRunner = (

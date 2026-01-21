@@ -18,8 +18,6 @@ export class MarkdownStreamParser {
             MarkdownStreamParser.instances.set(instanceId, new MarkdownStreamParser())    // Save the instance, ensure it is available statically
         }
 
-        console.info(`\x1b[34mAiStreamParser ->\x1b[0m class.MarkdownStreamParser::\x1b[32mgetInstance\x1b[0m::instanceId: ${instanceId}, instances: ${MarkdownStreamParser.instances}`)
-
         return MarkdownStreamParser.instances.get(instanceId)
     }
 
@@ -32,8 +30,8 @@ export class MarkdownStreamParser {
     constructor() {
         this.tokensStreamProcessor = new TokensStreamBuffer()
         this.markdownStreamParser = new MarkdownStreamParserStateMachine()
-        this.unsubscribeFromProcessor = () => {}
-        this.unsubscribeFromStateMachine = () => {}
+        this.unsubscribeFromProcessor = () => { }
+        this.unsubscribeFromStateMachine = () => { }
 
         this.parsing = false
         this.tokenParseListeners = []
@@ -62,7 +60,7 @@ export class MarkdownStreamParser {
             return // Do not start parsing if it's already started
         }
 
-        this.notifyTokenParse({status: 'START_STREAM'})
+        this.notifyTokenParse({ status: 'START_STREAM' })
 
         // Subscribe to receive the completed segment from TokensStreamBuffer
         this.unsubscribeFromProcessor = this.tokensStreamProcessor.subscribeToSegmentCompletion((word: string) => {
@@ -72,7 +70,7 @@ export class MarkdownStreamParser {
 
         // Subscribe to receive the parsed segment from TextStreamStateMachine
         this.unsubscribeFromStateMachine = this.markdownStreamParser.subscribeToParsedSegment((parsedSegment: any) => {
-            this.notifyTokenParse({status: 'STREAMING', segment: parsedSegment}) // Relay the parsed segment event
+            this.notifyTokenParse({ status: 'STREAMING', segment: parsedSegment }) // Relay the parsed segment event
         })
 
         this.parsing = true
@@ -82,8 +80,6 @@ export class MarkdownStreamParser {
     parseToken(chunk: string): Error | void {
         if (!this.parsing) {
             const error = new Error('Parser is not started.')
-            console.info(`\x1b[34mAiStreamParser ->\x1b[0m \x1b[31mclass.MarkdownStreamParser::parseToken::error\x1b[0m`, error)
-
             return error
         }
 
@@ -97,7 +93,7 @@ export class MarkdownStreamParser {
         this.unsubscribeFromProcessor()    // Unsubscribe from the processor
         this.unsubscribeFromStateMachine()    // Unsubscribe from the state machine
         this.parsing = false    // Mark as not parsing
-        this.notifyTokenParse({status: 'END_STREAM'})    // Notify that the stream has ended
+        this.notifyTokenParse({ status: 'END_STREAM' })    // Notify that the stream has ended
     }
 }
 
