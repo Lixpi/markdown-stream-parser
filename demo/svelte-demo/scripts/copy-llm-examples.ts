@@ -9,6 +9,14 @@ const SRC = path.resolve(__dirname, '../../llm-streams-examples');
 const DEST = path.resolve(__dirname, '../static/llm-streams-examples');
 
 async function main() {
+  // Check if source directory exists
+  try {
+    await fs.access(SRC);
+  } catch {
+    console.log(`Source directory ${SRC} does not exist, skipping copy.`);
+    return;
+  }
+
   await fs.mkdir(DEST, { recursive: true });
   const files = await fs.readdir(SRC);
   for (const file of files) {
