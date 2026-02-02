@@ -11,8 +11,8 @@
 		"prepack": "svelte-kit sync && svelte-package && publint",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"generate-manifest": "node scripts/generate-llm-examples-manifest.mjs",
-		"copy-llm-examples": "node scripts/copy-llm-examples.mjs",
+		"generate-manifest": "node --experimental-strip-types scripts/generate-llm-examples-manifest.ts",
+		"copy-llm-examples": "node --experimental-strip-types scripts/copy-llm-examples.ts",
 		"predev": "pnpm copy-llm-examples && pnpm generate-manifest",
 		"postinstall": "cp node_modules/web-tree-sitter/tree-sitter.wasm static/"
 	},
