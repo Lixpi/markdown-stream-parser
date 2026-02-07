@@ -2,9 +2,13 @@
 
 A library designed to incrementally parse Markdown text from a stream of tokens.
 
-It uses **tree-sitter** under the hood. Instead of regex pattern matching, we get a proper AST that tells us exactly what's a header, what's a code block, what's bold text, etc. Tree-sitter's error recovery also handles the imperfect markdown that LLMs tend to produce.
+It's built to handle the ambiguities of LLM-generated streams, which often produce imperfect or invalid Markdown. It combines a finite state machine with regex patterns to determine the best match for each segment.
 
-### ⚠️ ***This project is still in active development - there are bugs and missing features.***
+## This project is an **open-ended** research on how to incrementally parse LLM-streams.
+
+### ⚠️ ***Please note that this project is in an early stage of development, so there are MANY bugs and missing features.***
+
+### 🛑 All feature development is blocked by this *[research task](https://github.com/Lixpi/markdown-stream-parser/issues/5)* which would bring a complete re-imagining of the code. Stay tuned...
 
 <br>
 
@@ -273,229 +277,207 @@ The project includes comprehensive test coverage with 187 tests across all core 
 
 ## How It Works
 
-The parser uses **tree-sitter** for AST-based parsing. Instead of trying to match patterns with regex, we let tree-sitter build a syntax tree and then walk it to extract the content we need.
+#### The core of the parser is built around several key concepts:
 
-### High-Level Data Flow
+#### 1: Buffers
+
+The parser uses a two-level buffering system:
+
+1. **L1 Buffer (TokensStreamBuffer)**: Accumulates tokens until a complete segment (word, whitespace, punctuation) forms
+2. **L2 Buffer (inside the Parser)**: Analyzes segments to detect markdown patterns and apply styles
+
+This approach ensures style detection even when markdown syntax is split across multiple incoming chunks.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'secondaryTextColor': '#1a3a47', 'secondaryBorderColor': '#4a8a9d', 'tertiaryColor': '#DCECE9', 'tertiaryTextColor': '#1a3a47', 'tertiaryBorderColor': '#82B2C0', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
 flowchart LR
-    A[LLM Token] --> B[TokensStreamBuffer]
-    B --> C[Accumulate Content]
-    C --> D[Tree-sitter Parse]
-    D --> E[AST Traversal]
-    E --> F[Emit Segments]
-    F --> G[Subscribers]
+    A[Token] --> B[TokensStreamBuffer]
+    B --> C[Emit Complete Segment]
+    C --> D[MarkdownStreamParser]
+    D --> F((•))
 ```
 
-### Module Architecture
+#### 2: Blocks and Inline Elements
 
-The tree-sitter parsing logic is split into focused modules:
+Markdown consists of two fundamental components:
 
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'secondaryTextColor': '#1a3a47', 'secondaryBorderColor': '#4a8a9d', 'tertiaryColor': '#DCECE9', 'tertiaryTextColor': '#1a3a47', 'tertiaryBorderColor': '#82B2C0', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
-graph TB
-    subgraph "Entry Point"
-        Parser[MarkdownStreamParser]
-    end
+1. *Block-level elements* (paragraphs, headings, lists) which define document structure and cannot be nested within each other
+2. *Inline elements* (bold, italic, code spans) which apply styling within blocks
 
-    subgraph "Tree-sitter Modules"
-        SG[segment-generator.ts]
-        BD[block-detection.ts]
-        ID[inline-detection.ts]
-        CE[content-extraction.ts]
-        IE[inline-extractors.ts]
-        TN[tree-navigation.ts]
-        SB[segment-builder.ts]
-    end
+This distinction is central to our parsing approach, as it allows us to process markdown streams with predictable patterns. Block elements establish context, while inline styles modify content within that context.
 
-    subgraph "External"
-        TS[(web-tree-sitter)]
-        MD[(tree-sitter-markdown)]
-        MDI[(tree-sitter-markdown-inline)]
-    end
 
-    Parser --> SG
-    SG --> BD
-    SG --> ID
-    SG --> CE
-    SG --> IE
-    BD --> TN
-    ID --> TN
-    IE --> SB
-    CE --> TS
-    BD --> TS
-    ID --> TS
-    TS --> MD
-    TS --> MDI
-```
+#### 3: Routing aka State Machine
 
-| Module | Responsibility |
-|--------|----------------|
-| `segment-generator.ts` | Main orchestrator - generates segments from content ranges |
-| `block-detection.ts` | Figures out block type (header, paragraph, code block, list, table) |
-| `inline-detection.ts` | Detects active inline styles (bold, italic, code, strikethrough) |
-| `content-extraction.ts` | Strips markdown syntax and extracts clean content |
-| `inline-extractors.ts` | Extracts styled segments with proper marker stripping |
-| `tree-navigation.ts` | AST traversal utilities |
-| `segment-builder.ts` | Creates segment objects with consistent structure |
+The `MarkdownStreamParser` implements a state machine that processes text chunks from the `TokensStreamBuffer`. It utilizes pattern-matching evaluations based on regular expressions to determine the appropriate state transitions.
 
-### Parser API Flow
+The core of this architecture is the routing mechanism, which:
+
+1. Receives buffered segments from the stream processor
+2. Executes pattern-matching evaluations against incoming content (partial or full matches)
+3. Triggers corresponding actions based on matched patterns
+4. Transitions the parser into the appropriate state (block-level or inline)
+
+This consistent routing approach handles both high-level block elements (headings, paragraphs, code blocks) and inline styling (bold, italic, code spans) using the same underlying mechanism.
+
+Below is a **simplified diagram** for parsing a Markdown stream containing a paragraph with inline styles (italic, bold, etc.). This example omits other block types for clarity.
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'noteBkgColor': '#82B2C0', 'noteTextColor': '#1a3a47', 'noteBorderColor': '#5a9aad', 'actorBkg': '#F6C7B3', 'actorBorder': '#d4956a', 'actorTextColor': '#5a3a2a', 'actorLineColor': '#d4956a', 'signalColor': '#d4956a', 'signalTextColor': '#5a3a2a', 'labelBoxBkgColor': '#F6C7B3', 'labelBoxBorderColor': '#d4956a', 'labelTextColor': '#5a3a2a', 'loopTextColor': '#5a3a2a', 'activationBorderColor': '#d4956a', 'activationBkgColor': '#C3DEDD', 'sequenceNumberColor': '#5a3a2a'}}}%%
-sequenceDiagram
-    participant App as Your App
-    participant Parser as MarkdownStreamParser
-    participant Buffer as TokensStreamBuffer
-    participant TS as Tree-sitter
-    participant Gen as SegmentGenerator
-
-    rect rgb(220, 236, 233)
-        Note over App, Gen: Setup Phase
-        App->>Parser: getInstance(sessionId)
-        activate Parser
-        Parser->>TS: load WASM grammars
-        Parser-->>App: parser instance
-    end
-
-    rect rgb(195, 222, 221)
-        Note over App, Gen: Subscription Phase
-        App->>Parser: subscribeToTokenParse(listener)
-        App->>Parser: startParsing()
-        Parser-->>App: START_STREAM event
-    end
-
-    rect rgb(246, 199, 179)
-        Note over App, Gen: Streaming Phase
-        loop For each LLM token
-            App->>Parser: parseToken(chunk)
-            Parser->>Buffer: receiveChunk(chunk)
-            Buffer->>Parser: segment ready
-            Parser->>TS: parse(content)
-            TS-->>Parser: AST
-            Parser->>Gen: generateSegments(range)
-            Gen-->>Parser: StreamingChunk[]
-            Parser-->>App: notify(segment)
-        end
-    end
-
-    rect rgb(242, 234, 224)
-        Note over App, Gen: Cleanup Phase
-        App->>Parser: stopParsing()
-        Parser->>Buffer: flushBuffer()
-        Parser-->>App: END_STREAM event
-        deactivate Parser
-        App->>Parser: removeInstance(sessionId)
-    end
-```
-
-### Parser State Transitions
-
-```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#F6C7B3', 'primaryTextColor': '#5a3a2a', 'primaryBorderColor': '#d4956a', 'secondaryColor': '#C3DEDD', 'lineColor': '#d4956a', 'textColor': '#5a3a2a'}}}%%
 stateDiagram-v2
-    [*] --> Idle: getInstance()
+    [*] --> idle
+    idle --> routing: startParsing()
+    routing --> processParagraph: paragraph detected
+    processParagraph --> emit: emit parsed segment
+    emit --> routing: next segment
 
-    Idle --> Parsing: startParsing()
-    
-    state Parsing {
-        [*] --> AwaitingToken
-        
-        AwaitingToken --> ProcessingChunk: parseToken(chunk)
-        ProcessingChunk --> DetectingBlock: tree-sitter parse
-        DetectingBlock --> ProcessingHeader: atx_heading found
-        DetectingBlock --> ProcessingParagraph: paragraph found
-        DetectingBlock --> ProcessingCodeBlock: fenced_code_block found
-        DetectingBlock --> ProcessingList: list_item found
-        DetectingBlock --> ProcessingTable: pipe_table found
-        
-        ProcessingHeader --> DetectingInline: check inline styles
-        ProcessingParagraph --> DetectingInline: check inline styles
-        ProcessingList --> DetectingInline: check inline styles
-        ProcessingTable --> DetectingInline: check inline styles
-        
-        DetectingInline --> BufferingIncomplete: unmatched delimiter
-        DetectingInline --> EmitSegment: style complete
-        BufferingIncomplete --> AwaitingToken: wait for more
-        
-        ProcessingCodeBlock --> EmitSegment: extract content
-        EmitSegment --> AwaitingToken: notify subscribers
-    }
-    
-    Parsing --> Flushing: stopParsing()
-    Flushing --> Idle: END_STREAM
-    Idle --> [*]: removeInstance()
+    routing --> processInlineStylesGroup: inline style detected
+    processInlineStylesGroup --> emit: emit styled segment
+    emit --> routing: next segment
+
+    routing --> handleMalformedSyntax: malformed style (e.g., missing closing marker + new line symbol that denotes beginning of a new block)
+    handleMalformedSyntax --> emit: emit unstyled segment
+    emit --> routing: next segment
+
+    routing --> [*]: end of stream
+
+    %% Notes:
+    %% - "emit" represents emitting a parsed segment to subscribers.
+    %% - The state machine loops through routing and processing states for each segment.
+    %% - If an inline style is opened but not closed before a new line, the unstyled content is flushed via emit and the state machine returns to routing.
+    %% - Only paragraph and inline style states are shown for simplicity.
 ```
 
-### How Content Gets Processed
+Alternatively parser state transitions can be represented like this:
 
-#### 1. Token Buffering
+```mermaid
+stateDiagram-v2
+    direction LR
+    receiveToken --> buffer
+    buffer --> splitWords
+    splitWords --> routing
 
-Incoming tokens are accumulated in a `TokensStreamBuffer`. This gives us enough context to parse meaningful chunks rather than character-by-character.
+    routing --> processingHeader: header pattern detected
+    routing --> processingCodeBlock: code block detected
+    routing --> processingParagraph: default
 
-#### 2. AST-Based Parsing
+    processingHeader --> emit: emit parsed segment
+    processingHeader --> routing: inline style detected
 
-The core parsing is done by `web-tree-sitter` with the `tree-sitter-markdown` grammar. When content comes in, we parse it and get an AST that tells us exactly what we're dealing with - headers, paragraphs, code blocks, lists, bold text, etc.
+    processingParagraph --> emit: emit parsed segment
+    processingParagraph --> routing: inline style detected
 
-Tree-sitter handles incomplete/malformed markdown gracefully. It uses error recovery and can still produce a usable tree even when the input is partial or slightly broken (which happens constantly with LLM streams).
+    %% Inline styles can only be entered from header or paragraph
+    routing --> processingItalicText: italic detected
+    routing --> processingBoldText: bold detected
+    routing --> processingBoldItalicText: bold+italic detected
+    routing --> processingStrikethroughText: strikethrough detected
+    routing --> processingInlineCode: inline code detected
 
-#### 3. Handling Incomplete Inline Markers
+    processingItalicText --> emit: emit parsed segment
+    processingItalicText --> routing: next segment
 
-A tricky problem with streaming is that inline markers can arrive split across chunks. For example, you might get `**hello` in one chunk and `**` in the next.
+    processingBoldText --> emit
+    processingBoldText --> routing
 
-The parser buffers content when it detects an unmatched delimiter:
+    processingBoldItalicText --> emit
+    processingBoldItalicText --> routing
 
-```typescript
-// Check for unmatched backtick
-if (newPortion.includes('`')) {
-    const hasCompleteCodeSpan = hasCompleteCodeSpanAt(inlineTree.rootNode, ...);
-    if (!hasCompleteCodeSpan) {
-        state.pendingInlineContent = newContent;
-        return { segments, state };  // Buffer and wait for more
-    }
-}
+    processingStrikethroughText --> emit
+    processingStrikethroughText --> routing
+
+    processingInlineCode --> emit
+    processingInlineCode --> routing
+
+    processingCodeBlock --> emit
+    processingCodeBlock --> routing
+
+    emit --> routing: next segment
+    emit --> [*]: end of stream
 ```
 
-This applies to inline code, bold (`**`), italic (`*` or `_`), and strikethrough (`~~`).
+#### 4: Publish/Subscribe Pattern
 
-#### 4. Two-Parser Approach
+The parser uses a *publish/subscribe* pattern to decouple the flow of data from its consumption. This design enables you to feed data into the parser and independently subscribe to a stream of parsed output.
 
-For inline content within blocks, we use a second tree-sitter parser with the `tree-sitter-markdown-inline` grammar. This gives us detailed AST info about emphasis delimiters, code spans, etc.
-
-The two-parser approach (one for block structure, one for inline content) is how tree-sitter-markdown is designed to work. It lets us accurately detect things like whether a `*` is actually an italic marker or just a literal asterisk.
-
-### Pub/Sub and Singleton Patterns
-
-The parser uses a **publish/subscribe** pattern - you subscribe to get parsed segments as they're ready. Parsing is decoupled from rendering, and multiple subscribers per parser instance are supported.
-
-Each logical stream gets its own parser instance via `getInstance(instanceId)` (singleton pattern). This allows parallel processing of multiple streams without state conflicts.
-
-```typescript
-const parser = await MarkdownStreamParser.getInstance('session-1')
-// ... use the parser ...
-MarkdownStreamParser.removeInstance('session-1')  // cleanup when done
+```mermaid
+flowchart TD
+    A[Input Tokens] -->|buffer| B(TokensStreamBuffer)
+    B -->|segment| C(MarkdownStreamParserStateMachine)
+    C -->|buffer| D(MarkdownStreamParser)
+    D -->|notify parsed segment| E[Subscribers]
 ```
+
+##### Benefits of this approach:
+- Enables real-time, event-driven processing of Markdown streams
+- Cleanly separates parsing logic from rendering or further processing
+- Supports multiple independent subscribers per parser instance
+
+To receive parsed segments, simply subscribe to the parser before feeding data. Each subscriber is notified as soon as a new segment is available, and can unsubscribe at any time.
+
+#### 5. Singleton Pattern
+
+The parser utilizes a singleton pattern for instance management. Associate each logical stream with a unique `instanceId`. Use `MarkdownStreamParser.getInstance(instanceId)` to retrieve or create the parser for that stream, and `MarkdownStreamParser.removeInstance(instanceId)` for cleanup when the stream ends.
+
+This design enables *parallel processing* of multiple independent streams (e.g., concurrent user sessions or documents). By isolating each stream's state within its dedicated instance, the library ensures consistent state management.
+
+#### 6. Regex-driven Parsing
+
+This project uses a **regex-driven approach** for parsing segments, which while sometimes **debated** so far allowed to achieve the more stable result than previous attempts.
+**There's still HUGE number of bugs. Refer to some examples in demo.**
+
+For each markup type, we define a set of regex rules to detect both full matches (e.g., single-word styles) and partial matches, which indicate the start or end of a style applied across multiple words.
 
 ---
 
 
 ## Known issues
 
-- **Delayed processing for extremely long sequences of characters without whitespace**: Due to how token buffering works, extremely long uninterrupted sequences (like a huge regex) can delay output until the sequence completes. In practice this is rarely noticeable with modern LLM speeds, but it can happen.
+- **Delayed processing for extremely long sequences of characters without whitespace**: This is a downside of using the L1 buffer. Given the speed of modern LLMs, it's not a significant issue. The only time it becomes visually noticeable is when an LLM generates an **extremely long** regex, causing the output to freeze until receiving the final sequence. While this may be inconvenient, it's a rare edge case and not a high priority to fix.
+
+- **Inline styles for headings** are not implemented yet. Therefore, when a stream contains something like `### Title **with bold word**`, only the heading part will be detected. This should be fixed in the near future.
 
 ---
+
+
+## Future Plans and Directions
+
+### Exploration of Alternative Parsing Architectures
+
+While our current regex-based approach provides good results for LLM-generated Markdown streams, we recognize that established parsing libraries may offer additional benefits for long-term scalability and maintenance. We're evaluating:
+
+- **Tree-sitter**
+  - A mature incremental parsing system adopted by Neovim and formerly by Atom
+  - Offers syntax recovery parsing with efficient incremental updates
+  - References:
+    - [Tree-sitter Documentation](https://tree-sitter.github.io/)
+    - [Tree-sitter repo](https://github.com/tree-sitter/tree-sitter)
+    - [Node.js Tree-sitter repo](https://github.com/tree-sitter/node-tree-sitter)
+    - [A Markdown parser for tree-sitter](https://github.com/tree-sitter-grammars/tree-sitter-markdown)
+
+- **Lezer**
+  - Modern incremental parser system developed by the authors of **ProseMirror** && **CodeMirror**...
+  - Designed specifically for editor use cases, also supports syntax recovery, though not sure if as advanced as `Tree-sitter`
+  - References:
+    - [Lezer Documentation](https://lezer.codemirror.net)
+    - [Lezer Markdown Grammar](https://github.com/lezer-parser/markdown)
+
+1. These parsers can effectively handle partial Markdown syntax across stream chunks
+2. Our L1 buffer concept could be integrated with these parsers to maintain the current user experience
+
+
+**Community feedback and contributions are especially welcome regarding these architectural considerations, as diverse use cases will help inform the best approach.**
+Please feel free to share your thoughts in **[discussions](https://github.com/Lixpi/markdown-stream-parser/discussions)**.
 
 
 ## Contributions and Roadmap
 
 - **Contributions:**
-  PRs and issues are *welcome*! Feel free to share your thoughts in **[discussions](https://github.com/Lixpi/markdown-stream-parser/discussions)**.
+  PRs and issues are *welcome*!
+
 
 - **Roadmap:**
-  - Support for the missing markdown features listed earlier
+  - Support for the missing markdown features listed earlier.
   - Performance optimizations
-  - Improved error recovery for malformed streams
+  - Build an AST (abstract syntax tree) model to represent the parsed stream in memory
 
 ---
 

@@ -4,8 +4,6 @@ build/
 # Node modules
 node_modules/
 .pnpm-store/
-.npm-cache/
-package-lock.json
 
 # Logs
 npm-debug.log*
@@ -47,9 +45,3 @@ Icon?
 
 # Temporary files
 demo/svelte-demo/static/llm-streams-examples/
-
-# Generated WASM files (built during container build)
-demo/svelte-demo/static/tree-sitter-markdown.wasm
-demo/svelte-demo/static/tree-sitter-markdown-inline.wasm
-demo/svelte-demo/static/tree-sitter.wasm
-demo/svelte-demo/src/assets/parsers/tree-sitter-markdown.wasm

@@ -24,9 +24,8 @@
     ],
     "scripts": {
         "build": "tsup src/markdown-stream-parser.ts --dts --format esm,cjs --minify --out-dir build --no-sourcemap",
-        "debug-parser-tree-sitter": "node ./demo/utils/char-streamer-tree-sitter.ts",
-        "debug-parser": "node ./demo/utils/char-streamer.ts",
-        "split-sample-into-chunks": "node ./demo/utils/split-sample-into-chunks.ts",
+        "debug-parser": "node ./demo/debug-scripts/char-streamer.ts",
+        "split-sample-into-chunks": "node ./demo/debug-scripts/split-sample-into-chunks.ts",
         "test": "vitest",
         "test:run": "vitest run",
         "prepare": "pnpm run build"
@@ -36,12 +35,11 @@
         "typescript": "*",
         "tsup": "^8.0.0",
         "semver": "^7.5.4",
-        "web-tree-sitter": "*",
-        "@tree-sitter-grammars/tree-sitter-markdown": "*",
         "vitest": "^2.0.0",
         "@vitest/ui": "^2.0.0"
     },
-    "dependencies": {},
+    "dependencies": {
+    },
     "repository": {
         "type": "git",
         "url": "https://github.com/lixpi/markdown-stream-parser"

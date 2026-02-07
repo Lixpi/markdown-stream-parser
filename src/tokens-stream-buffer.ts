@@ -53,13 +53,7 @@ export default class TokensStreamBuffer {
     }
 
     private notifyWordCompletion(word: string) {
-        this.wordCompleteListeners.forEach(listener => {
-            try {
-                listener(word);
-            } catch (e) {
-                console.error('[TokensStreamBuffer] Listener error for word:', JSON.stringify(word), e);
-            }
-        });
+        this.wordCompleteListeners.forEach(listener => listener(word))
     }
 
     public subscribeToSegmentCompletion(listener: (word: string) => void) {
