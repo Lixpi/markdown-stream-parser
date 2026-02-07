@@ -1,0 +1,8 @@
+{
+  "grammars": [
+    {
+      "name": "markdown_inline",
+      "path": "node_modules/.pnpm/@tree-sitter-grammars+tree-sitter-markdown@0.3.2_tree-sitter@0.21.1/node_modules/@tree-sitter-grammars/tree-sitter-markdown/tree-sitter-markdown-inline"
+    }
+  ]
+}

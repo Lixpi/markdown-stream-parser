@@ -16,6 +16,7 @@ services:
             - ./demo/:/usr/src/service/demo/:cached
             - ./src/:/usr/src/service/src/:cached
             - ./build/:/usr/src/service/build/:cached
+            - ./scripts/:/usr/src/service/scripts/:cached
             - ./package.json/:/usr/src/service/package.json:cached
             - ./tsconfig.json/:/usr/src/service/tsconfig.json:cached
         ports:
@@ -30,6 +31,5 @@ services:
         # command: >
         #     pnpm run dev
         command: >
-            sh -c "pnpm i
-            && sleep infinity"
+            sh -c "scripts/build-wasm.sh && pnpm i && sleep infinity"
         stop_signal: SIGTERM
