@@ -97,7 +97,7 @@
   function updateOpenSpans(chunk: Chunk) {
     // Remove closed spans
     for (const closedSpan of chunk.closing) {
-      openSpans = openSpans.filter(s => s.type !== closedSpan.type);
+      openSpans = openSpans.filter((s) => s.type !== closedSpan.type);
     }
 
     // Add new opening spans
@@ -135,6 +135,43 @@
           } else if (parsed.status === "START_STREAM") {
             parsedSegments = [...parsedSegments, parsed];
           } else if (parsed.status === "STREAMING") {
+            const chunk = parsed.chunk;
+
+            console.log("📦 CHUNK received", {
+              text: JSON.stringify(chunk.text),
+              offset: chunk.offset,
+              length: chunk.length,
+              block: chunk.block.type,
+              backtrackOffset: chunk.backtrackOffset,
+            });
+
+            if (chunk.backtrackOffset !== undefined) {
+              console.warn("⚠️ BACKTRACK detected!", {
+                backtrackOffset: chunk.backtrackOffset,
+                chunkText: chunk.text,
+                chunkOffset: chunk.offset,
+                discarding: parsedSegments
+                  .filter(
+                    (seg) =>
+                      seg.status === "STREAMING" &&
+                      seg.chunk.offset + seg.chunk.length >
+                        chunk.backtrackOffset!,
+                  )
+                  .map((seg) =>
+                    seg.status === "STREAMING" ? seg.chunk.text : null,
+                  ),
+              });
+
+              parsedSegments = parsedSegments.filter((seg) => {
+                if (seg.status !== "STREAMING") return true;
+                return (
+                  seg.chunk.offset + seg.chunk.length <= chunk.backtrackOffset!
+                );
+              });
+
+              openSpans = [];
+            }
+
             parsedSegments = [...parsedSegments, parsed];
             updateOpenSpans(parsed.chunk);
 
@@ -288,13 +325,14 @@
 
       if (blockType !== lastBlockType) {
         isNewBlock = true;
-      } else if (blockType === 'heading' && blockLevel !== lastBlockLevel) {
+      } else if (blockType === "heading" && blockLevel !== lastBlockLevel) {
         isNewBlock = true;
-      } else if (blockType === 'list_item' && lastOffset >= 0) {
+      } else if (blockType === "list_item" && lastOffset >= 0) {
         // New list item if there's a significant gap in offset (indicates newline/new item)
         // Or if the text starts after a newline marker
         const gap = chunk.offset - lastOffset;
-        if (gap > 50) { // Heuristic: large gap suggests new list item
+        if (gap > 50) {
+          // Heuristic: large gap suggests new list item
           isNewBlock = true;
         }
       }
@@ -358,24 +396,24 @@
   function getSpanClasses(styles: SpanType[]): string {
     const classes: string[] = [];
 
-    if (styles.includes('bold') && styles.includes('italic')) {
-      classes.push('font-bold', 'italic');
-    } else if (styles.includes('bold')) {
-      classes.push('font-bold');
-    } else if (styles.includes('italic')) {
-      classes.push('italic');
+    if (styles.includes("bold") && styles.includes("italic")) {
+      classes.push("font-bold", "italic");
+    } else if (styles.includes("bold")) {
+      classes.push("font-bold");
+    } else if (styles.includes("italic")) {
+      classes.push("italic");
     }
 
-    if (styles.includes('strikethrough')) {
-      classes.push('line-through');
+    if (styles.includes("strikethrough")) {
+      classes.push("line-through");
     }
 
-    return classes.join(' ');
+    return classes.join(" ");
   }
 
   // Check if style includes code
   function hasCodeStyle(styles: SpanType[]): boolean {
-    return styles.includes('code');
+    return styles.includes("code");
   }
 </script>
 
@@ -393,8 +431,12 @@
       !!! Please keep that in mind...
     </h2>
     <h3 class="mb-5">
-      This <b>parser setup example is just an AI slop</b>, its only goal is to visually showcase the parser.
-      <b>pls refer to the readme file for better instruction on how to user parser API</b>
+      This <b>parser setup example is just an AI slop</b>, its only goal is to
+      visually showcase the parser.
+      <b
+        >pls refer to the readme file for better instruction on how to user
+        parser API</b
+      >
     </h3>
   </div>
   <label class="block text-sm font-medium mb-1">Select LLM Example</label>
@@ -476,16 +518,22 @@
           {@const blockType = block[0]?.block.type}
           {@const blockLevel = block[0]?.block.level}
           {@const blockLanguage = block[0]?.block.language}
-          {@const hasTableCells = blockType === 'table_cell' || blockType === 'table_row'}
+          {@const hasTableCells =
+            blockType === "table_cell" || blockType === "table_row"}
 
           <div class="my-1 {hasTableCells ? 'flex flex-wrap gap-0' : ''}">
-            {#if blockType === 'heading'}
+            {#if blockType === "heading"}
               {#if blockLevel === 1}
                 <h1 class="inline text-2xl font-bold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -494,9 +542,14 @@
               {:else if blockLevel === 2}
                 <h2 class="inline text-xl font-bold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -505,9 +558,14 @@
               {:else if blockLevel === 3}
                 <h3 class="inline text-lg font-semibold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -516,9 +574,14 @@
               {:else if blockLevel === 4}
                 <h4 class="inline text-base font-semibold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -527,9 +590,14 @@
               {:else if blockLevel === 5}
                 <h5 class="inline text-sm font-semibold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -538,9 +606,14 @@
               {:else if blockLevel === 6}
                 <h6 class="inline text-xs font-semibold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
@@ -549,49 +622,76 @@
               {:else}
                 <span class="inline font-semibold">
                   {#each block as chunk}
-                    {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
                     {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
                       <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
                   {/each}
                 </span>
               {/if}
-            {:else if blockType === 'code_block'}
-              <pre class="inline bg-gray-100 rounded p-1 font-mono text-sm text-gray-800 overflow-x-auto align-middle"><code>{#each block as chunk}{chunk.text}{/each}</code></pre>
+            {:else if blockType === "code_block"}
+              <pre
+                class="inline bg-gray-100 rounded p-1 font-mono text-sm text-gray-800 overflow-x-auto align-middle"><code
+                  >{#each block as chunk}{chunk.text}{/each}</code
+                ></pre>
               {#if blockLanguage}
                 <span class="text-xs text-gray-500 ml-2">{blockLanguage}</span>
               {/if}
-            {:else if blockType === 'blockquote'}
-              <span class="inline border-l-4 border-blue-400 pl-2 italic text-gray-700">
+            {:else if blockType === "blockquote"}
+              <span
+                class="inline border-l-4 border-blue-400 pl-2 italic text-gray-700"
+              >
                 {#each block as chunk}
-                  {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
                   {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
                   {:else}
                     <span class={getSpanClasses(styles)}>{chunk.text}</span>
                   {/if}
                 {/each}
               </span>
-            {:else if blockType === 'list_item'}
+            {:else if blockType === "list_item"}
               <span class="inline text-base leading-relaxed">
                 <span class="mr-1">•</span>
                 {#each block as chunk}
-                  {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
                   {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
                   {:else}
                     <span class={getSpanClasses(styles)}>{chunk.text}</span>
                   {/if}
                 {/each}
               </span>
-            {:else if blockType === 'table_cell' || blockType === 'table_row'}
+            {:else if blockType === "table_cell" || blockType === "table_row"}
               {#each block as chunk}
-                {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
-                <span class="inline-block border border-gray-300 px-2 py-1 text-sm">
+                {@const styles = [
+                  ...chunk.contained.map((s) => s.type),
+                  ...chunk.opening.map((s) => s.type),
+                ]}
+                <span
+                  class="inline-block border border-gray-300 px-2 py-1 text-sm"
+                >
                   {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
                   {:else}
                     <span class={getSpanClasses(styles)}>{chunk.text}</span>
                   {/if}
@@ -601,9 +701,14 @@
               <!-- Default paragraph rendering -->
               <span class="inline text-base leading-relaxed">
                 {#each block as chunk}
-                  {@const styles = [...chunk.contained.map(s => s.type), ...chunk.opening.map(s => s.type)]}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
                   {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono">{chunk.text}</code>
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
                   {:else}
                     <span class={getSpanClasses(styles)}>{chunk.text}</span>
                   {/if}
