@@ -29,7 +29,6 @@ import {
     createPlainTextChunk,
     createCodeBlockChunk,
     createHeadingChunk,
-    byteOffsetToUtf16,
 
     createOpenSpan,
     createClosedSpan,
@@ -156,8 +155,9 @@ function categorizeSpanNode(
     const spanType = detectSpanType(node.type)
     if (!spanType) return {}
 
-    const spanStartUtf16 = byteOffsetToUtf16(content, node.startIndex)
-    const spanEndUtf16 = byteOffsetToUtf16(content, node.endIndex)
+    // node.startIndex/endIndex are already UTF-16 character offsets in web-tree-sitter JS bindings
+    const spanStartUtf16 = node.startIndex
+    const spanEndUtf16 = node.endIndex
     const spanLength = spanEndUtf16 - spanStartUtf16
 
     // Fully contained

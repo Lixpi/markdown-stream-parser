@@ -2,7 +2,7 @@ import { Parser, Language } from 'web-tree-sitter'
 import TokensStreamBuffer from './tokens-stream-buffer.js'
 import type { StreamingChunk, BlockState, ParserConfig, SegmentGeneratorState, Chunk } from './tree-sitter/types.js'
 import { generateSegments, createInitialState } from './tree-sitter/segment-generator.js'
-import { utf16ToByteOffset } from './tree-sitter/segment-builder.js'
+
 
 // Re-export types for external consumers
 export type {
@@ -318,20 +318,18 @@ export class MarkdownStreamParser {
             const changedRanges = this.previousTree.getChangedRanges(this.currentTree)
 
             for (const range of changedRanges) {
-                // Convert byte offset to UTF-16 offset for the backtrack position
+                // range.startIndex is already a UTF-16 character offset in web-tree-sitter JS bindings
                 // If the change starts before what we've emitted, we need to backtrack
-                const changeStartUtf16 = this.byteToUtf16(range.startIndex)
+                const changeStartUtf16 = range.startIndex
 
                 if (changeStartUtf16 < this.generatorState.lastEmittedOffset) {
+                    console.log('🔴 BACKTRACK TRIGGERED: changeStart', changeStartUtf16, '< lastEmitted', this.generatorState.lastEmittedOffset)
                     // Check windowSize constraint
                     const backtrackDistance = this.generatorState.lastEmittedOffset - changeStartUtf16
 
                     if (this.config.windowSize === undefined || backtrackDistance <= this.config.windowSize) {
-                        // Backtrack is within window
                         backtrackOffset = Math.min(backtrackOffset ?? Infinity, changeStartUtf16)
                     } else {
-                        // Backtrack exceeds window - best effort
-                        // Set backtrack to the edge of the window
                         const windowStart = this.generatorState.lastEmittedOffset - this.config.windowSize
                         backtrackOffset = Math.min(backtrackOffset ?? Infinity, windowStart)
                     }
@@ -341,8 +339,7 @@ export class MarkdownStreamParser {
 
         if (backtrackOffset !== undefined) {
             // Error recovery: re-generate segments from the backtrack point
-            // Convert UTF-16 backtrack offset to byte offset for generateSegments
-            const backtrackByteOffset = utf16ToByteOffset(this.content, backtrackOffset)
+            // backtrackOffset is already a UTF-16 character offset
 
             // Reset generator state to the backtrack point
             const resetState: SegmentGeneratorState = {
@@ -351,11 +348,11 @@ export class MarkdownStreamParser {
                 openSpans: [],
                 currentBlock: null,
                 pendingInlineContent: '',
-                accumulatedContent: this.content.substring(0, backtrackByteOffset),
+                accumulatedContent: this.content.substring(0, backtrackOffset),
             }
 
             // Re-generate all segments from backtrack point through end of content
-            const result = generateSegments(backtrackByteOffset, this.content.length, {
+            const result = generateSegments(backtrackOffset, this.content.length, {
                 content: this.content,
                 currentTree: this.currentTree,
                 inlineParser: this.inlineParser,
@@ -398,21 +395,7 @@ export class MarkdownStreamParser {
         return result.segments
     }
 
-    // Convert byte offset to UTF-16 code unit offset.
-    private byteToUtf16(byteOffset: number): number {
-        const encoder = new TextEncoder()
-        let utf16Offset = 0
-        let currentByteOffset = 0
 
-        for (const char of this.content) {
-            if (currentByteOffset >= byteOffset) break
-            const charBytes = encoder.encode(char).length
-            currentByteOffset += charBytes
-            utf16Offset += char.length
-        }
-
-        return utf16Offset
-    }
 
     // Get the current accumulated content.
     getCurrentContent(): string {

@@ -137,13 +137,8 @@
           } else if (parsed.status === "STREAMING") {
             const chunk = parsed.chunk;
 
-            console.log("📦 CHUNK received", {
-              text: JSON.stringify(chunk.text),
-              offset: chunk.offset,
-              length: chunk.length,
-              block: chunk.block.type,
-              backtrackOffset: chunk.backtrackOffset,
-            });
+
+
 
             if (chunk.backtrackOffset !== undefined) {
               console.warn("⚠️ BACKTRACK detected!", {
