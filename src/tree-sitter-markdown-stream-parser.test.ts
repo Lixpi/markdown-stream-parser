@@ -657,47 +657,80 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(backtrackChunks.length).toBe(0)
     })
 
-    it('should emit backtrackOffset when tree-sitter re-parses a region', async () => {
-      // Stream bold text split across chunks — tree-sitter will initially
-      // parse "**bold" as error/plain text, then correct when "**" arrives
-      parser.parseToken('Hello **bold')
-      parser.parseToken('** rest\n')
-      parser.stopParsing()
+    it('should emit backtrackOffset when table header is reclassified', async () => {
+      // When '| Col A | Col B |' arrives alone, tree-sitter parses it as paragraph.
+      // When '| --- | --- |' arrives next, tree-sitter reclassifies the first line
+      // as pipe_table_header — a genuine block-level structural change.
+      const tableId = 'test-table-backtrack'
+      const tableParser = await MarkdownStreamParser.getInstance(tableId)
+      const tableChunks: Chunk[] = []
 
-      // Check if any chunk has backtrackOffset set
-      const backtrackChunks = parsedChunks.filter(c => c.backtrackOffset !== undefined)
+      tableParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING' && chunk.chunk) {
+          tableChunks.push(chunk.chunk)
+        }
+      })
 
-      // If tree-sitter detected a correction, we should see backtrackOffset
-      // and the corrected chunks should contain the bold span
-      if (backtrackChunks.length > 0) {
-        const backtrackChunk = backtrackChunks[0]
-        expect(backtrackChunk.backtrackOffset).toBeDefined()
-        expect(typeof backtrackChunk.backtrackOffset).toBe('number')
-        expect(backtrackChunk.backtrackOffset!).toBeGreaterThanOrEqual(0)
+      tableParser.startParsing()
+      tableParser.parseToken('| Col A | Col B |\n')
+      tableParser.parseToken('| --- | --- |\n')
+      tableParser.parseToken('| cell1 | cell2 |\n')
+      tableParser.stopParsing()
 
-        // After the backtrack, the corrected chunks should have bold text
-        // Find all chunks emitted at or after the backtrack offset
-        const correctedChunks = parsedChunks.filter(
-          c => c.offset >= backtrackChunk.backtrackOffset!
-        )
-        expect(correctedChunks.length).toBeGreaterThan(0)
-      }
+      const backtrackChunks = tableChunks.filter(c => c.backtrackOffset !== undefined)
+      expect(backtrackChunks.length).toBeGreaterThan(0)
+
+      const firstBacktrack = backtrackChunks[0]
+      expect(firstBacktrack.backtrackOffset).toBeDefined()
+      expect(typeof firstBacktrack.backtrackOffset).toBe('number')
+      expect(firstBacktrack.backtrackOffset!).toBeGreaterThanOrEqual(0)
+
+      MarkdownStreamParser.removeInstance(tableId)
     })
 
     it('should re-emit corrected segments from backtrack point', async () => {
-      // Stream italic that starts ambiguously
-      parser.parseToken('Text *italic')
-      parser.parseToken('* more\n')
-      parser.stopParsing()
+      const tableId = 'test-table-reemit'
+      const tableParser = await MarkdownStreamParser.getInstance(tableId)
+      const tableChunks: Chunk[] = []
 
-      // Check the full reconstructed text contains expected content
-      const fullText = parsedChunks.map(c => c.text).join('')
-      expect(fullText).toContain('Text')
-      expect(fullText).toContain('more')
+      tableParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING' && chunk.chunk) {
+          tableChunks.push(chunk.chunk)
+        }
+      })
+
+      tableParser.startParsing()
+      tableParser.parseToken('| Name | Age |\n')
+      tableParser.parseToken('| --- | --- |\n')
+      tableParser.parseToken('| Alice | 30 |\n')
+      tableParser.stopParsing()
+
+      // After backtracking, re-generated chunks should be emitted
+      const backtrackChunks = tableChunks.filter(c => c.backtrackOffset !== undefined)
+      expect(backtrackChunks.length).toBeGreaterThan(0)
+
+      // Reconstruct text using only the LATEST chunks (simulating a consumer
+      // that discards old content when backtrackOffset is seen)
+      let activeChunks = [...tableChunks]
+      for (const btChunk of backtrackChunks) {
+        const btOffset = btChunk.backtrackOffset!
+        const btIdx = activeChunks.indexOf(btChunk)
+        // Discard everything from btOffset onwards, keep only chunks before
+        activeChunks = [
+          ...activeChunks.filter((c, idx) => idx < btIdx && c.offset + c.length <= btOffset),
+          ...activeChunks.slice(btIdx)
+        ]
+      }
+
+      const fullText = activeChunks.map(c => c.text).join('')
+      expect(fullText).toContain('Name')
+      expect(fullText).toContain('Age')
+      expect(fullText).toContain('Alice')
+
+      MarkdownStreamParser.removeInstance(tableId)
     })
 
     it('should respect windowSize configuration', async () => {
-      // Create a parser with windowSize constraint
       const windowInstanceId = 'test-window-size'
       const windowParser = await MarkdownStreamParser.getInstance(windowInstanceId, {
         windowSize: 5,
@@ -711,23 +744,22 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       })
 
       windowParser.startParsing()
-
-      // Stream content that might trigger backtracking
-      windowParser.parseToken('Hello **bold text here')
-      windowParser.parseToken('** end\n')
+      // Table reclassification triggers backtracking
+      windowParser.parseToken('| Header1 | Header2 |\n')
+      windowParser.parseToken('| --- | --- |\n')
       windowParser.stopParsing()
 
-      // If backtracking occurred, the offset should be clamped
       const backtrackChunks = windowChunks.filter(c => c.backtrackOffset !== undefined)
       if (backtrackChunks.length > 0) {
-        const lastEmitted = Math.max(...windowChunks
-          .filter(c => c.backtrackOffset === undefined)
-          .map(c => c.offset + c.length))
-        const backtrackChunk = backtrackChunks[0]
+        // Find the furthest emit point before the backtrack chunk
+        const btChunk = backtrackChunks[0]
+        const btIdx = windowChunks.indexOf(btChunk)
+        const priorChunks = windowChunks.slice(0, btIdx).filter(c => c.backtrackOffset === undefined)
 
-        // The backtrack distance should not exceed windowSize
-        if (lastEmitted > 0) {
-          const distance = lastEmitted - backtrackChunk.backtrackOffset!
+        if (priorChunks.length > 0) {
+          const lastEmitted = Math.max(...priorChunks.map(c => c.offset + c.length))
+          const distance = lastEmitted - btChunk.backtrackOffset!
+          // The backtrack distance should not exceed windowSize
           expect(distance).toBeLessThanOrEqual(5)
         }
       }

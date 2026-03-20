@@ -323,7 +323,6 @@ export class MarkdownStreamParser {
                 const changeStartUtf16 = range.startIndex
 
                 if (changeStartUtf16 < this.generatorState.lastEmittedOffset) {
-                    console.log('🔴 BACKTRACK TRIGGERED: changeStart', changeStartUtf16, '< lastEmitted', this.generatorState.lastEmittedOffset)
                     // Check windowSize constraint
                     const backtrackDistance = this.generatorState.lastEmittedOffset - changeStartUtf16
 
@@ -342,7 +341,7 @@ export class MarkdownStreamParser {
             // backtrackOffset is already a UTF-16 character offset
 
             // Reset generator state to the backtrack point
-            const resetState: SegmentGeneratorState = {
+            let state: SegmentGeneratorState = {
                 totalUtf16Offset: backtrackOffset,
                 lastEmittedOffset: backtrackOffset,
                 openSpans: [],
@@ -351,30 +350,43 @@ export class MarkdownStreamParser {
                 accumulatedContent: this.content.substring(0, backtrackOffset),
             }
 
-            // Re-generate all segments from backtrack point through end of content
-            const result = generateSegments(backtrackOffset, this.content.length, {
-                content: this.content,
-                currentTree: this.currentTree,
-                inlineParser: this.inlineParser,
-                state: resetState,
-                config: this.config,
-            })
+            // Re-generate all segments from backtrack point through end of content.
+            // generateSegments only processes one node per call, so we must loop
+            // through word-sized sub-ranges, matching how TokensStreamBuffer drives
+            // the parser in the normal path.
+            const allBacktrackSegments: StreamingChunk[] = []
+            const contentToReprocess = this.content.substring(backtrackOffset)
+            const wordRanges = this.splitIntoWordRanges(contentToReprocess)
+
+            for (const range of wordRanges) {
+                const fromIdx = backtrackOffset + range.start
+                const toIdx = backtrackOffset + range.end
+                const result = generateSegments(fromIdx, toIdx, {
+                    content: this.content,
+                    currentTree: this.currentTree,
+                    inlineParser: this.inlineParser,
+                    state,
+                    config: this.config,
+                })
+                state = result.state
+                allBacktrackSegments.push(...result.segments)
+            }
 
             // Update state
-            this.generatorState = result.state
+            this.generatorState = state
 
             // Set backtrackOffset on the first re-generated chunk
-            if (result.segments.length > 0) {
-                const firstSeg = result.segments[0]
+            if (allBacktrackSegments.length > 0) {
+                const firstSeg = allBacktrackSegments[0]
                 if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
                     firstSeg.chunk.backtrackOffset = backtrackOffset
                 }
             }
 
             // Store all segments for debugging
-            this.allSegments.push(...result.segments)
+            this.allSegments.push(...allBacktrackSegments)
 
-            return result.segments
+            return allBacktrackSegments
         }
 
         // Normal path: no backtracking, generate segments for new content only
@@ -396,6 +408,47 @@ export class MarkdownStreamParser {
     }
 
 
+    // Split content into word-sized ranges matching TokensStreamBuffer's logic.
+    // Each range is { start, end } relative to the input string.
+    private splitIntoWordRanges(text: string): Array<{ start: number; end: number }> {
+        const ranges: Array<{ start: number; end: number }> = []
+        let i = 0
+
+        while (i < text.length) {
+            const segmentStart = i
+
+            // Skip leading whitespace
+            while (i < text.length && this.isWhitespace(text[i])) {
+                i++
+            }
+
+            // If only whitespace remains, include it as final range
+            if (i >= text.length) {
+                if (i > segmentStart) {
+                    ranges.push({ start: segmentStart, end: i })
+                }
+                break
+            }
+
+            // Consume non-whitespace (the word)
+            while (i < text.length && !this.isWhitespace(text[i])) {
+                i++
+            }
+
+            // Consume trailing whitespace
+            while (i < text.length && this.isWhitespace(text[i])) {
+                i++
+            }
+
+            ranges.push({ start: segmentStart, end: i })
+        }
+
+        return ranges
+    }
+
+    private isWhitespace(char: string): boolean {
+        return char === ' ' || char === '\t' || char === '\n' || char === '\r'
+    }
 
     // Get the current accumulated content.
     getCurrentContent(): string {
