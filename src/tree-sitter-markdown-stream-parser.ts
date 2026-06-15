@@ -2,6 +2,7 @@ import { Parser, Language } from 'web-tree-sitter'
 import TokensStreamBuffer from './tokens-stream-buffer.js'
 import type { StreamingChunk, BlockState, ParserConfig, SegmentGeneratorState, Chunk } from './tree-sitter/types.js'
 import { generateSegments, createInitialState } from './tree-sitter/segment-generator.js'
+import { utf16ToByteOffset } from './tree-sitter/segment-builder.js'
 
 // Re-export types for external consumers
 export type {
@@ -338,7 +339,48 @@ export class MarkdownStreamParser {
             }
         }
 
-        // Generate segments using the refactored module
+        if (backtrackOffset !== undefined) {
+            // Error recovery: re-generate segments from the backtrack point
+            // Convert UTF-16 backtrack offset to byte offset for generateSegments
+            const backtrackByteOffset = utf16ToByteOffset(this.content, backtrackOffset)
+
+            // Reset generator state to the backtrack point
+            const resetState: SegmentGeneratorState = {
+                totalUtf16Offset: backtrackOffset,
+                lastEmittedOffset: backtrackOffset,
+                openSpans: [],
+                currentBlock: null,
+                pendingInlineContent: '',
+                accumulatedContent: this.content.substring(0, backtrackByteOffset),
+            }
+
+            // Re-generate all segments from backtrack point through end of content
+            const result = generateSegments(backtrackByteOffset, this.content.length, {
+                content: this.content,
+                currentTree: this.currentTree,
+                inlineParser: this.inlineParser,
+                state: resetState,
+                config: this.config,
+            })
+
+            // Update state
+            this.generatorState = result.state
+
+            // Set backtrackOffset on the first re-generated chunk
+            if (result.segments.length > 0) {
+                const firstSeg = result.segments[0]
+                if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
+                    firstSeg.chunk.backtrackOffset = backtrackOffset
+                }
+            }
+
+            // Store all segments for debugging
+            this.allSegments.push(...result.segments)
+
+            return result.segments
+        }
+
+        // Normal path: no backtracking, generate segments for new content only
         const result = generateSegments(oldLength, this.content.length, {
             content: this.content,
             currentTree: this.currentTree,
@@ -349,14 +391,6 @@ export class MarkdownStreamParser {
 
         // Update state
         this.generatorState = result.state
-
-        // Add backtrackOffset to first chunk if needed
-        if (backtrackOffset !== undefined && result.segments.length > 0) {
-            const firstSeg = result.segments[0]
-            if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
-                firstSeg.chunk.backtrackOffset = backtrackOffset
-            }
-        }
 
         // Store all segments for debugging
         this.allSegments.push(...result.segments)

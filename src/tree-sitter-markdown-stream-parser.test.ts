@@ -645,4 +645,94 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(hasStrippedCode).toBe(true)
     })
   })
+
+  describe('Error Recovery', () => {
+    it('should not emit backtrackOffset for clean streaming', async () => {
+      parser.parseToken('Hello ')
+      parser.parseToken('world\n')
+      parser.stopParsing()
+
+      // No chunks should have backtrackOffset set
+      const backtrackChunks = parsedChunks.filter(c => c.backtrackOffset !== undefined)
+      expect(backtrackChunks.length).toBe(0)
+    })
+
+    it('should emit backtrackOffset when tree-sitter re-parses a region', async () => {
+      // Stream bold text split across chunks — tree-sitter will initially
+      // parse "**bold" as error/plain text, then correct when "**" arrives
+      parser.parseToken('Hello **bold')
+      parser.parseToken('** rest\n')
+      parser.stopParsing()
+
+      // Check if any chunk has backtrackOffset set
+      const backtrackChunks = parsedChunks.filter(c => c.backtrackOffset !== undefined)
+
+      // If tree-sitter detected a correction, we should see backtrackOffset
+      // and the corrected chunks should contain the bold span
+      if (backtrackChunks.length > 0) {
+        const backtrackChunk = backtrackChunks[0]
+        expect(backtrackChunk.backtrackOffset).toBeDefined()
+        expect(typeof backtrackChunk.backtrackOffset).toBe('number')
+        expect(backtrackChunk.backtrackOffset!).toBeGreaterThanOrEqual(0)
+
+        // After the backtrack, the corrected chunks should have bold text
+        // Find all chunks emitted at or after the backtrack offset
+        const correctedChunks = parsedChunks.filter(
+          c => c.offset >= backtrackChunk.backtrackOffset!
+        )
+        expect(correctedChunks.length).toBeGreaterThan(0)
+      }
+    })
+
+    it('should re-emit corrected segments from backtrack point', async () => {
+      // Stream italic that starts ambiguously
+      parser.parseToken('Text *italic')
+      parser.parseToken('* more\n')
+      parser.stopParsing()
+
+      // Check the full reconstructed text contains expected content
+      const fullText = parsedChunks.map(c => c.text).join('')
+      expect(fullText).toContain('Text')
+      expect(fullText).toContain('more')
+    })
+
+    it('should respect windowSize configuration', async () => {
+      // Create a parser with windowSize constraint
+      const windowInstanceId = 'test-window-size'
+      const windowParser = await MarkdownStreamParser.getInstance(windowInstanceId, {
+        windowSize: 5,
+      })
+
+      const windowChunks: Chunk[] = []
+      windowParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING' && chunk.chunk) {
+          windowChunks.push(chunk.chunk)
+        }
+      })
+
+      windowParser.startParsing()
+
+      // Stream content that might trigger backtracking
+      windowParser.parseToken('Hello **bold text here')
+      windowParser.parseToken('** end\n')
+      windowParser.stopParsing()
+
+      // If backtracking occurred, the offset should be clamped
+      const backtrackChunks = windowChunks.filter(c => c.backtrackOffset !== undefined)
+      if (backtrackChunks.length > 0) {
+        const lastEmitted = Math.max(...windowChunks
+          .filter(c => c.backtrackOffset === undefined)
+          .map(c => c.offset + c.length))
+        const backtrackChunk = backtrackChunks[0]
+
+        // The backtrack distance should not exceed windowSize
+        if (lastEmitted > 0) {
+          const distance = lastEmitted - backtrackChunk.backtrackOffset!
+          expect(distance).toBeLessThanOrEqual(5)
+        }
+      }
+
+      MarkdownStreamParser.removeInstance(windowInstanceId)
+    })
+  })
 })

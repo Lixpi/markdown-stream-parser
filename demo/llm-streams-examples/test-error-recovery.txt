@@ -1,0 +1,3 @@
+Hello **bold** rest
+Normal text.
+Then *italic* stuff
