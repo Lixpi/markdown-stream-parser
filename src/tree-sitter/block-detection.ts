@@ -1,11 +1,11 @@
-import type { Parser } from 'web-tree-sitter'
+import type { Node } from 'web-tree-sitter'
 import { HEADER_MARKER_LEVELS, type BlockInfo, type BlockState } from './types.js'
 import { findBlockNode } from './tree-navigation.js'
 
 // Get the block type and properties from a tree-sitter node.
 // Walks up the tree to find the enclosing block structure.
-export function getBlockInfo(node: Parser.SyntaxNode): BlockInfo {
-    let current: Parser.SyntaxNode | null = node
+export function getBlockInfo(node: Node): BlockInfo {
+    let current: Node | null = node
     let foundParagraph = false
     let foundTableCell = false
     let isInHeader = false
@@ -70,7 +70,7 @@ export function getBlockInfo(node: Parser.SyntaxNode): BlockInfo {
 }
 
 // Check if the given node represents a new block compared to the current block state.
-export function isNewBlock(blockInfo: BlockInfo, node: Parser.SyntaxNode, currentBlock: BlockState | null): boolean {
+export function isNewBlock(blockInfo: BlockInfo, node: Node, currentBlock: BlockState | null): boolean {
     const blockNode = findBlockNode(node)
     if (!blockNode) return false
 
@@ -86,7 +86,7 @@ export function isNewBlock(blockInfo: BlockInfo, node: Parser.SyntaxNode, curren
 
 // Extract the heading level from an atx_heading node.
 // Uses tree-sitter node type lookup with fallback to character counting.
-export function getHeadingLevel(node: Parser.SyntaxNode): number {
+export function getHeadingLevel(node: Node): number {
     // Use tree-sitter node type lookup instead of regex
     for (const child of node.children) {
         const level = HEADER_MARKER_LEVELS[child.type]
@@ -109,7 +109,7 @@ export function getHeadingLevel(node: Parser.SyntaxNode): number {
 }
 
 // Extract the language identifier from a fenced_code_block node.
-export function getCodeBlockLanguage(node: Parser.SyntaxNode): string {
+export function getCodeBlockLanguage(node: Node): string {
     // For fenced_code_block, look for info_string child
     if (node.type === 'fenced_code_block') {
         for (let i = 0; i < node.childCount; i++) {

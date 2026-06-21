@@ -1,10 +1,10 @@
-import type { Parser } from 'web-tree-sitter'
+import type { Node } from 'web-tree-sitter'
 import { BLOCK_TYPES } from './types.js'
 
 // Find the deepest node in the BLOCK tree that contains the given position.
 // Uses exclusive end: position must be strictly less than endIndex.
 // This ensures we find nodes that START at position, not ones that END at position.
-export function findActiveNodeAtPosition(node: Parser.SyntaxNode, position: number): Parser.SyntaxNode | null {
+export function findActiveNodeAtPosition(node: Node, position: number): Node | null {
     if (position < node.startIndex || position >= node.endIndex) {
         return null
     }
@@ -26,7 +26,7 @@ export function findActiveNodeAtPosition(node: Parser.SyntaxNode, position: numb
 
 // Find a node in the tree that contains the given position.
 // Uses inclusive end bounds.
-export function findNodeInTree(node: Parser.SyntaxNode, position: number): Parser.SyntaxNode | null {
+export function findNodeInTree(node: Node, position: number): Node | null {
     if (position < node.startIndex || position > node.endIndex) {
         return null
     }
@@ -43,7 +43,7 @@ export function findNodeInTree(node: Parser.SyntaxNode, position: number): Parse
 
 // Find an inline node that contains the given position.
 // Returns the 'inline' or 'pipe_table_cell' node if found.
-export function findInlineNodeAtPosition(node: Parser.SyntaxNode, position: number): Parser.SyntaxNode | null {
+export function findInlineNodeAtPosition(node: Node, position: number): Node | null {
     // If this node is an inline node that contains the position, return it
     if (node.type === 'inline' && position >= node.startIndex && position < node.endIndex) {
         return node
@@ -67,8 +67,8 @@ export function findInlineNodeAtPosition(node: Parser.SyntaxNode, position: numb
 
 // Find the block-level node that contains the given node.
 // Walks up the tree until a block type is found.
-export function findBlockNode(node: Parser.SyntaxNode): Parser.SyntaxNode | null {
-    let current: Parser.SyntaxNode | null = node
+export function findBlockNode(node: Node): Node | null {
+    let current: Node | null = node
 
     while (current) {
         if (BLOCK_TYPES.indexOf(current.type as typeof BLOCK_TYPES[number]) !== -1) {

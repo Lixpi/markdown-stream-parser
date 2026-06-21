@@ -1,9 +1,5 @@
 import fs from 'fs'
-import Parser from 'tree-sitter'
-import Markdown from '@tree-sitter-grammars/tree-sitter-markdown';
-import { MarkdownStreamParser, type StreamingChunk } from '../../src/tree-sitter-markdown-stream-parser.ts'
-
-import { log, info, infoStr, warn, err } from './debug-tools.ts'
+import { MarkdownStreamParser, type StreamingChunk } from '../../src/markdown-stream-parser.ts'
 
 // Parse CLI arguments
 const args = process.argv.slice(2);
@@ -31,9 +27,6 @@ if (!filePath) {
 
 const sourceFile = `/usr/src/service/demo/llm-streams-examples/${filePath}`;
 
-// Get parser instance with unique ID
-const markdownStreamParser = MarkdownStreamParser.getInstance(filePath);
-
 type JSONChunk = string | object;
 
 async function* streamJSONinChunks(
@@ -53,6 +46,9 @@ async function* streamJSONinChunks(
 }
 
 (async () => {
+    MarkdownStreamParser.configureWasmPath('/usr/src/service/demo/svelte-demo/static/tree-sitter-markdown.wasm');
+    const markdownStreamParser = await MarkdownStreamParser.getInstance(filePath);
+
     console.log('\n');
     console.log(`Loading file: ${sourceFile}`);
     console.log(`Delay between chunks: ${DELAY}ms`);
@@ -76,7 +72,7 @@ async function* streamJSONinChunks(
                 console.log('=== Stream Started ===\n');
             } else if (chunk.status === 'END_STREAM') {
                 console.log('\n=== Stream Ended ===');
-            } else if (chunk.status === 'STREAMING' && chunk.segment) {
+            } else if (chunk.status === 'STREAMING' && chunk.chunk) {
                 console.log(`Segment:`, JSON.stringify(chunk, null, 2));
             }
         });

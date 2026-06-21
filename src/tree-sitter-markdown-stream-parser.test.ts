@@ -20,6 +20,23 @@ function getSpanTypes(chunk: Chunk): SpanType[] {
   return allSpans.map(span => span.type)
 }
 
+function getClosedSpans(chunks: Chunk[]): ClosedSpan[] {
+  return chunks.flatMap(c => [...c.contained, ...c.closing])
+}
+
+function applyBacktracks(chunks: Chunk[]): Chunk[] {
+  let activeChunks: Chunk[] = []
+
+  for (const chunk of chunks) {
+    if (chunk.backtrackOffset !== undefined) {
+      activeChunks = activeChunks.filter(c => c.offset + c.length <= chunk.backtrackOffset!)
+    }
+    activeChunks.push(chunk)
+  }
+
+  return activeChunks
+}
+
 describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
   let parser: MarkdownStreamParser
   let parsedChunks: Chunk[] = []
@@ -379,6 +396,88 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       // Should detect strikethrough style
       expect(strikethroughChunks.length).toBeGreaterThan(0)
     })
+
+    it('should parse inline code after stripped heading syntax', async () => {
+      parser.parseToken('## Use `npm install` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Use npm install now')
+      expect(codeSpan).toBeDefined()
+      expect(codeSpan?.offset).toBe('Use '.length)
+      expect(codeSpan?.length).toBe('npm install'.length)
+    })
+
+    it('should parse inline code after stripped list syntax', async () => {
+      parser.parseToken('- Run `npm install` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Run npm install now\n')
+      expect(codeSpan).toBeDefined()
+      expect(codeSpan?.offset).toBe('Run '.length)
+      expect(codeSpan?.length).toBe('npm install'.length)
+    })
+
+    it('should parse inline code after bold syntax using rendered offsets', async () => {
+      parser.parseToken('Use **bold** then `code` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const boldSpan = getClosedSpans(activeChunks).find(s => s.type === 'bold')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Use bold then code now\n')
+      expect(boldSpan?.offset).toBe('Use '.length)
+      expect(boldSpan?.length).toBe('bold'.length)
+      expect(codeSpan?.offset).toBe('Use bold then '.length)
+      expect(codeSpan?.length).toBe('code'.length)
+    })
+  })
+
+  describe('Split Inline Code', () => {
+    it('should buffer split inline code delimiters across chunks', async () => {
+      parser.parseToken('Run `npm')
+      parser.parseToken(' install` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Run npm install now\n')
+      expect(codeSpan?.offset).toBe('Run '.length)
+      expect(codeSpan?.length).toBe('npm install'.length)
+    })
+
+    it('should buffer split inline code after stripped heading syntax', async () => {
+      parser.parseToken('## Run `npm')
+      parser.parseToken(' install` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Run npm install now')
+      expect(codeSpan?.offset).toBe('Run '.length)
+      expect(codeSpan?.length).toBe('npm install'.length)
+    })
+
+    it('should flush unmatched inline backtick content at stream end', async () => {
+      parser.parseToken('Run `npm install now\n')
+      parser.stopParsing()
+
+      const fullText = parsedChunks.map(c => c.text).join('')
+      expect(fullText).toBe('Run `npm install now\n')
+    })
   })
 
   describe('Real LLM Stream Integration', () => {
@@ -577,9 +676,54 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
         expect(parsedChunks[0].length).toBeGreaterThan(0)
       }
     })
+
+    it('should use rendered offsets after stripping heading markers', async () => {
+      parser.parseToken('## ')
+      parser.parseToken('Title\n')
+      parser.parseToken('Next\n')
+      parser.stopParsing()
+
+      const rendered = parsedChunks.map(c => c.text).join('')
+      expect(rendered).toBe('TitleNext\n')
+
+      const title = parsedChunks.find(c => c.text.includes('Title'))
+      const next = parsedChunks.find(c => c.text.includes('Next'))
+      expect(title?.offset).toBe(0)
+      expect(title?.length).toBe('Title'.length)
+      expect(next?.offset).toBe('Title'.length)
+    })
+
+    it('should use rendered offsets and lengths for inline spans', async () => {
+      parser.parseToken('Hello **world**\n')
+      parser.stopParsing()
+
+      const rendered = parsedChunks.map(c => c.text).join('')
+      expect(rendered).toBe('Hello world\n')
+
+      const boldSpan = parsedChunks.flatMap(c => c.contained).find(s => s.type === 'bold')
+      expect(boldSpan).toBeDefined()
+      expect(boldSpan?.offset).toBe('Hello '.length)
+      expect(boldSpan?.length).toBe('world'.length)
+    })
+
+    it('should use rendered offsets after stripping code fences', async () => {
+      parser.parseToken('```js\n')
+      parser.parseToken('code\n')
+      parser.parseToken('```\n')
+      parser.parseToken('After\n')
+      parser.stopParsing()
+
+      const rendered = parsedChunks.map(c => c.text).join('')
+      expect(rendered).toBe('code\nAfter\n')
+
+      const code = parsedChunks.find(c => c.block.type === 'code_block' && c.text.includes('code'))
+      const after = parsedChunks.find(c => c.text.includes('After'))
+      expect(code?.offset).toBe(0)
+      expect(after?.offset).toBe('code\n'.length)
+    })
   })
   describe('Table Inline Code', () => {
-    it.skip('should strip backticks from inline code inside tables', async () => {
+    it('should strip backticks from inline code inside tables', async () => {
       parser.parseToken('| Col | `code` |\n')
       parser.stopParsing()
 
@@ -592,7 +736,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(hasSpanType(cellChunks[0], 'code')).toBe(true)
     })
 
-    it.skip('should detect table block types for complete tables', async () => {
+    it('should detect table block types for complete tables', async () => {
       parser.parseToken('| A | B |\n')
       parser.parseToken('|---|---|\n')
       parser.parseToken('| 1 | 2 |\n')
@@ -618,7 +762,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(pipeChunks.length).toBe(0)
     })
 
-    it.skip('should suppress delimiter row content', async () => {
+    it('should suppress delimiter row content', async () => {
       parser.parseToken('| A |\n')
       parser.parseToken('|---|\n')
       parser.parseToken('| B |\n')
@@ -630,7 +774,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(delimiterChunks.length).toBe(0)
     })
 
-    it.skip('should handle inline code in full table structure', async () => {
+    it('should handle inline code in full table structure', async () => {
       parser.parseToken('| Header |\n')
       parser.parseToken('|--------|\n')
       parser.parseToken('| `code` |\n')
@@ -765,6 +909,200 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       }
 
       MarkdownStreamParser.removeInstance(windowInstanceId)
+    })
+
+    it('should backtrack using rendered offsets after preceding markdown syntax', async () => {
+      const recoveryId = 'test-rendered-backtrack-offset'
+      const recoveryParser = await MarkdownStreamParser.getInstance(recoveryId)
+      const recoveryChunks: Chunk[] = []
+
+      recoveryParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          recoveryChunks.push(chunk.chunk)
+        }
+      })
+
+      recoveryParser.startParsing()
+      recoveryParser.parseToken('## ')
+      recoveryParser.parseToken('Before\n\n')
+      recoveryParser.parseToken('| Name | Age |\n')
+      recoveryParser.parseToken('| --- | --- |\n')
+      recoveryParser.parseToken('| Alice | 30 |\n')
+      recoveryParser.stopParsing()
+
+      const backtrack = recoveryChunks.find(c => c.backtrackOffset !== undefined)
+      expect(backtrack).toBeDefined()
+      expect(backtrack?.backtrackOffset).toBe('Before'.length)
+
+      const activeChunks = applyBacktracks(recoveryChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      expect(fullText).toContain('Before')
+      expect(fullText).toContain('Name')
+      expect(fullText).toContain('Age')
+      expect(fullText).toContain('Alice')
+
+      MarkdownStreamParser.removeInstance(recoveryId)
+    })
+
+    it('should keep raw source originals while recovery offsets stay rendered', async () => {
+      const rawId = 'test-recovery-raw-original'
+      const rawParser = await MarkdownStreamParser.getInstance(rawId, {
+        includeRawStreamedToken: true,
+      })
+      const rawChunks: Chunk[] = []
+
+      rawParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          rawChunks.push(chunk.chunk)
+        }
+      })
+
+      rawParser.startParsing()
+      rawParser.parseToken('Intro\n\n')
+      rawParser.parseToken('| Name | Age |\n')
+      rawParser.parseToken('| --- | --- |\n')
+      rawParser.stopParsing()
+
+      const backtrack = rawChunks.find(c => c.backtrackOffset !== undefined)
+      expect(backtrack).toBeDefined()
+      expect(backtrack?.backtrackOffset).toBe('Intro\n\n'.length)
+      expect(rawChunks.some(c => c.original?.includes('Name'))).toBe(true)
+
+      MarkdownStreamParser.removeInstance(rawId)
+    })
+  })
+
+  describe('Code Fence Recovery', () => {
+    it('should strip split code fences and emit code block content', async () => {
+      parser.parseToken('Text before\n')
+      parser.parseToken('```js\n')
+      parser.parseToken('const x = 1\n')
+      parser.parseToken('```\n')
+      parser.stopParsing()
+
+      const allText = parsedChunks.map(c => c.text).join('')
+      const codeChunks = parsedChunks.filter(c => c.block.type === 'code_block')
+
+      expect(allText).toContain('Text before')
+      expect(allText).toContain('const x = 1')
+      expect(allText).not.toContain('```')
+      expect(codeChunks.map(c => c.text).join('')).toContain('const x = 1')
+      expect(codeChunks.some(c => c.block.language === 'js')).toBe(true)
+    })
+
+    it('should recover when an emitted paragraph is reclassified as a code fence', async () => {
+      const codeFenceId = 'test-code-fence-reclassification'
+      const codeFenceParser = await MarkdownStreamParser.getInstance(codeFenceId)
+      const codeFenceChunks: Chunk[] = []
+
+      codeFenceParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          codeFenceChunks.push(chunk.chunk)
+        }
+      })
+
+      codeFenceParser.startParsing()
+      codeFenceParser.parseToken('Text before\n\n')
+      codeFenceParser.parseToken('```')
+      codeFenceParser.parseToken('js\n')
+      codeFenceParser.parseToken('const x = 1\n')
+      codeFenceParser.stopParsing()
+
+      const activeChunks = applyBacktracks(codeFenceChunks)
+      const allText = activeChunks.map(c => c.text).join('')
+      const codeChunks = activeChunks.filter(c => c.block.type === 'code_block')
+
+      expect(allText).toContain('Text before')
+      expect(allText).toContain('const x = 1')
+      expect(allText).not.toContain('```')
+      expect(allText).not.toContain('js\nconst x')
+      expect(codeChunks.map(c => c.text).join('')).toContain('const x = 1')
+      expect(codeChunks.some(c => c.block.language === 'js')).toBe(true)
+
+      MarkdownStreamParser.removeInstance(codeFenceId)
+    })
+
+    it('should emit unclosed fence content as code at stream end', async () => {
+      parser.parseToken('```python\n')
+      parser.parseToken('print("hi")\n')
+      parser.stopParsing()
+
+      const allText = parsedChunks.map(c => c.text).join('')
+      const codeChunks = parsedChunks.filter(c => c.block.type === 'code_block')
+
+      expect(allText).toBe('print("hi")\n')
+      expect(allText).not.toContain('```')
+      expect(codeChunks.map(c => c.text).join('')).toBe('print("hi")\n')
+      expect(codeChunks.some(c => c.block.language === 'python')).toBe(true)
+    })
+
+    it('should use rendered offsets for code fences after stripped markdown syntax', async () => {
+      parser.parseToken('## ')
+      parser.parseToken('Heading\n\n')
+      parser.parseToken('```ts\n')
+      parser.parseToken('let a = 1\n')
+      parser.parseToken('```\n')
+      parser.stopParsing()
+
+      const heading = parsedChunks.find(c => c.block.type === 'heading')
+      const codeChunks = parsedChunks.filter(c => c.block.type === 'code_block')
+      const firstCode = codeChunks[0]
+      const backtrack = parsedChunks.find(c => c.backtrackOffset !== undefined)
+
+      expect(heading?.text).toBe('Heading')
+      expect(codeChunks.map(c => c.text).join('')).toBe('let a = 1\n')
+      expect(firstCode?.offset).toBe('Heading'.length)
+      if (backtrack) {
+        expect(backtrack.backtrackOffset).toBeGreaterThanOrEqual(0)
+        expect(backtrack.backtrackOffset).toBeLessThanOrEqual('Heading'.length)
+      }
+    })
+
+    it('should strip an opening fence split across chunks', async () => {
+      parser.parseToken('``')
+      parser.parseToken('`js\n')
+      parser.parseToken('const x = 1\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const allText = activeChunks.map(c => c.text).join('')
+      const codeChunks = activeChunks.filter(c => c.block.type === 'code_block')
+
+      expect(allText).toBe('const x = 1\n')
+      expect(codeChunks.map(c => c.text).join('')).toBe('const x = 1\n')
+      expect(codeChunks.some(c => c.block.language === 'js')).toBe(true)
+    })
+
+    it('should keep rendered offsets when a fence follows stripped formatting', async () => {
+      const codeFenceId = 'test-code-fence-rendered-reclassification'
+      const codeFenceParser = await MarkdownStreamParser.getInstance(codeFenceId)
+      const codeFenceChunks: Chunk[] = []
+
+      codeFenceParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          codeFenceChunks.push(chunk.chunk)
+        }
+      })
+
+      codeFenceParser.startParsing()
+      codeFenceParser.parseToken('- Before\n\n')
+      codeFenceParser.parseToken('```')
+      codeFenceParser.parseToken('js\n')
+      codeFenceParser.parseToken('const x = 1\n')
+      codeFenceParser.stopParsing()
+
+      const backtrack = codeFenceChunks.find(c => c.backtrackOffset !== undefined)
+      const activeChunks = applyBacktracks(codeFenceChunks)
+      const allText = activeChunks.map(c => c.text).join('')
+
+      expect(allText).toContain('Before')
+      expect(allText).toContain('const x = 1')
+      expect(allText).not.toContain('```')
+      if (backtrack) {
+        expect(backtrack.backtrackOffset).toBe('Before'.length)
+      }
+
+      MarkdownStreamParser.removeInstance(codeFenceId)
     })
   })
 })

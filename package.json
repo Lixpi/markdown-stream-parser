@@ -9,9 +9,9 @@
     "types": "build/markdown-stream-parser.d.ts",
     "exports": {
         ".": {
+            "types": "./build/markdown-stream-parser.d.ts",
             "import": "./build/markdown-stream-parser.js",
-            "require": "./build/markdown-stream-parser.cjs",
-            "types": "./build/markdown-stream-parser.d.ts"
+            "require": "./build/markdown-stream-parser.cjs"
         }
     },
     "files": [
@@ -23,7 +23,7 @@
         "README.md"
     ],
     "scripts": {
-        "build": "tsup src/markdown-stream-parser.ts --dts --format esm,cjs --minify --out-dir build --no-sourcemap",
+        "build": "tsdown",
         "debug-parser-tree-sitter": "node ./demo/utils/char-streamer-tree-sitter.ts",
         "debug-parser": "node ./demo/utils/char-streamer.ts",
         "split-sample-into-chunks": "node ./demo/utils/split-sample-into-chunks.ts",
@@ -34,14 +34,15 @@
     "devDependencies": {
         "chalk": "*",
         "typescript": "*",
-        "tsup": "^8.0.0",
+        "tsdown": "^0.22.3",
         "semver": "^7.5.4",
-        "web-tree-sitter": "*",
         "@tree-sitter-grammars/tree-sitter-markdown": "*",
         "vitest": "^2.0.0",
         "@vitest/ui": "^2.0.0"
     },
-    "dependencies": {},
+    "dependencies": {
+        "web-tree-sitter": "*"
+    },
     "repository": {
         "type": "git",
         "url": "https://github.com/lixpi/markdown-stream-parser"

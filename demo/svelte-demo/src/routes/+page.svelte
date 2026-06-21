@@ -7,7 +7,7 @@
     type OpenSpan,
     type ClosedSpan,
     type SpanType,
-  } from "../../../../src/tree-sitter-markdown-stream-parser.js";
+  } from "../../../../src/markdown-stream-parser.js";
 
   type ExampleFile = { base: string; json: string; txt: string };
 

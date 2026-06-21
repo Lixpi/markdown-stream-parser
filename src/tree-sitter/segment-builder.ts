@@ -10,6 +10,45 @@ import type {
 } from './types.js'
 
 // ============================================================================
+// UTF-16 OFFSET UTILITIES
+// ============================================================================
+
+// Convert byte offset to UTF-16 code unit offset.
+// Tree-sitter gives us byte positions, but JavaScript strings use UTF-16.
+export function byteOffsetToUtf16(text: string, byteOffset: number): number {
+    const encoder = new TextEncoder()
+    let utf16Offset = 0
+    let currentByteOffset = 0
+
+    for (const char of text) {
+        if (currentByteOffset >= byteOffset) break
+        const charBytes = encoder.encode(char).length
+        currentByteOffset += charBytes
+        // Each JS string char is 1 UTF-16 code unit, except surrogates (2)
+        utf16Offset += char.length // .length gives UTF-16 code units
+    }
+
+    return utf16Offset
+}
+
+// Convert UTF-16 offset to byte offset.
+// Needed when we have UTF-16 positions and need tree-sitter byte positions.
+export function utf16ToByteOffset(text: string, utf16Offset: number): number {
+    const encoder = new TextEncoder()
+    let currentUtf16 = 0
+    let byteOffset = 0
+
+    for (const char of text) {
+        if (currentUtf16 >= utf16Offset) break
+        const charBytes = encoder.encode(char).length
+        byteOffset += charBytes
+        currentUtf16 += char.length
+    }
+
+    return byteOffset
+}
+
+// ============================================================================
 // BLOCK CONTEXT HELPERS
 // ============================================================================
 
@@ -30,6 +69,8 @@ function mapBlockType(type: string): BlockType {
         case 'pipe_table_row':
             return 'table_row'
         case 'pipe_table_cell':
+        case 'table_header_cell':
+        case 'table_cell':
             return 'table_cell'
         case 'blockquote':
             return 'blockquote'
