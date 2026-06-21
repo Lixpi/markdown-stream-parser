@@ -1,6 +1,6 @@
 import type { Node } from 'web-tree-sitter'
-import { HEADER_MARKER_LEVELS, type BlockInfo, type BlockState } from './types.js'
-import { findBlockNode } from './tree-navigation.js'
+import { HEADER_MARKER_LEVELS, type BlockInfo, type BlockState } from './types.ts'
+import { findBlockNode } from './tree-navigation.ts'
 
 // Get the block type and properties from a tree-sitter node.
 // Walks up the tree to find the enclosing block structure.

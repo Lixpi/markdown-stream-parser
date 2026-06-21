@@ -1,7 +1,7 @@
 import { Parser, Language, type Tree, type Node } from 'web-tree-sitter'
-import TokensStreamBuffer from './tokens-stream-buffer.js'
-import type { StreamingChunk, ParserConfig, SegmentGeneratorState } from './tree-sitter/types.js'
-import { generateSegments, createInitialState, stateFromCheckpoint } from './tree-sitter/segment-generator.js'
+import TokensStreamBuffer from './tokens-stream-buffer.ts'
+import type { StreamingChunk, ParserConfig, SegmentGeneratorState } from './tree-sitter/types.ts'
+import { generateSegments, createInitialState, stateFromCheckpoint } from './tree-sitter/segment-generator.ts'
 
 
 // Re-export types for external consumers
@@ -15,7 +15,7 @@ export type {
     Chunk,
     StreamingChunk,
     ParserConfig
-} from './tree-sitter/types.js'
+} from './tree-sitter/types.ts'
 
 // Tree-sitter based streaming markdown parser.
 //

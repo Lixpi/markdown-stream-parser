@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MarkdownStreamParser } from './tree-sitter-markdown-stream-parser'
-import type { Chunk, ClosedSpan, SpanType } from './tree-sitter/types.js'
+import type { Chunk, ClosedSpan, SpanType } from './tree-sitter/types.ts'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'

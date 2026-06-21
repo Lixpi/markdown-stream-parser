@@ -1,4 +1,4 @@
-export { MarkdownStreamParser } from './tree-sitter-markdown-stream-parser.js'
+export { MarkdownStreamParser } from './tree-sitter-markdown-stream-parser.ts'
 
 export type {
     Span,
@@ -10,4 +10,4 @@ export type {
     Chunk,
     StreamingChunk,
     ParserConfig,
-} from './tree-sitter-markdown-stream-parser.js'
+} from './tree-sitter-markdown-stream-parser.ts'

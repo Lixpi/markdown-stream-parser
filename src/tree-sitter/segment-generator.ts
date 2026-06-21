@@ -7,9 +7,9 @@ import type {
     ClosedSpan,
     SpanType,
     ParserConfig
-} from './types.js'
-import { findActiveNodeAtPosition, findInlineNodeAtPosition, findBlockNode } from './tree-navigation.js'
-import { getBlockInfo } from './block-detection.js'
+} from './types.ts'
+import { findActiveNodeAtPosition, findInlineNodeAtPosition, findBlockNode } from './tree-navigation.ts'
+import { getBlockInfo } from './block-detection.ts'
 import {
     hasCompleteCodeSpanAt,
     hasCompleteBoldAt,
@@ -21,8 +21,8 @@ import {
     hasIncompleteImageOpening,
     hasUnmatchedItalicMarker,
     isInsideCodeBlock
-} from './inline-detection.js'
-import { getHeaderContent, getCodeBlockContent, getInlineContent } from './content-extraction.js'
+} from './inline-detection.ts'
+import { getHeaderContent, getCodeBlockContent, getInlineContent } from './content-extraction.ts'
 import {
     createChunkFromBlockInfo,
     createPlainTextChunk,
@@ -31,7 +31,7 @@ import {
     createClosedSpan,
     createLinkSpan,
     createImageSpan
-} from './segment-builder.js'
+} from './segment-builder.ts'
 
 // Re-import the constant that we need locally
 const HEADER_MARKER_LEVELS_LOCAL: Record<string, number> = {

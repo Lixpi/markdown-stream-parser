@@ -1,7 +1,7 @@
 import type { Parser, Tree, Node } from 'web-tree-sitter'
-import type { StreamingChunk, BlockInfo, InlineStyleConfig, SpanType, ClosedSpan } from './types.js'
-import { findInlineNodeAtPosition } from './tree-navigation.js'
-import { createChunkFromBlockInfo, createClosedSpan, byteOffsetToUtf16 } from './segment-builder.js'
+import type { StreamingChunk, BlockInfo, InlineStyleConfig, SpanType, ClosedSpan } from './types.ts'
+import { findInlineNodeAtPosition } from './tree-navigation.ts'
+import { createChunkFromBlockInfo, createClosedSpan, byteOffsetToUtf16 } from './segment-builder.ts'
 
 // NOTE: These legacy extractors are kept for backward compatibility but are
 // no longer used by the main segment generator. The new API uses processInlineSpans()

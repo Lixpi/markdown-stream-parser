@@ -308,7 +308,7 @@ parser.setConfig({ windowSize: 1000 })
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `windowSize` | `number` | `undefined` (unlimited) | Maximum backtrack distance in UTF-16 code units. Limits how far back the parser can correct previous output. |
+| `windowSize` | `number` | `undefined` (unlimited) | Requested lookback window in rendered UTF-16 code units. Recovery beyond this window does not yet have a strict public overflow contract; see [Known issues and limitations](#known-issues-and-limitations). |
 | `includeRawStreamedToken` | `boolean` | `false` | When `true`, each chunk includes the original markdown source in `chunk.original`. Useful as a fallback for unsupported formatting. |
 
 
@@ -389,7 +389,7 @@ This will execute the parser against the selected example stream and print parse
 
 ## Running tests
 
-The project includes comprehensive test coverage with 219+ tests across all core functionality. To run the tests:
+The project includes comprehensive test coverage with 235+ tests across all core functionality. To run the tests:
 
 1. Start the Docker container:
    ```bash
@@ -612,9 +612,13 @@ MarkdownStreamParser.removeInstance('session-1')  // cleanup when done
 ---
 
 
-## Known issues
+## Known issues and limitations
 
 - **Delayed processing for extremely long sequences of characters without whitespace**: Due to how token buffering works, extremely long uninterrupted sequences (like a huge regex) can delay output until the sequence completes. In practice this is rarely noticeable with modern LLM speeds, but it can happen.
+- **Recovery beyond `windowSize` is not strictly defined yet**: `windowSize` is measured against rendered UTF-16 output, but the parser does not currently emit a dedicated overflow event when the structurally correct recovery point is older than the configured window. Consumers that require guaranteed correction should leave `windowSize` undefined until an explicit overflow/fallback contract is implemented.
+- **Inline-delimiter replay needs more coverage**: Split inline delimiters are buffered during normal streaming, but recovery tests do not yet fully assert opening and closing span state when already-emitted inline content is replayed.
+- **Deletion-only recovery needs direct coverage**: The parser can emit a zero-length correction chunk when stale rendered output must be removed without replacement, but this path does not yet have a dedicated recovery test.
+- **Some Markdown structures remain incomplete**: Blockquotes and full table behavior still have skipped feature tests and are tracked in the feature list above.
 
 ---
 
@@ -626,8 +630,11 @@ MarkdownStreamParser.removeInstance('session-1')  // cleanup when done
 
 - **Roadmap:**
   - Support for the missing markdown features listed earlier
-  - Performance optimizations
-  - Improved error recovery for malformed streams
+  - Define a strict `windowSize` overflow contract. Recovery must select a checkpoint at or before the earliest structurally affected source position and must never silently choose a later checkpoint merely to fit the window. The intended API should report that the recovery limit was exceeded or use an explicitly configured fallback such as a full snapshot replacement.
+  - Add recovery coverage for inline delimiter replay, including opening and closing spans, and for deletion-only corrections that emit a zero-length chunk.
+  - Improve checkpoint scaling: create checkpoints only at stable block boundaries or configured intervals, move checkpoint storage out of copied generator state, prune history outside the supported recovery range, retain an older baseline when unlimited recovery is enabled, and use indexed/binary-search lookup by source and rendered offsets.
+  - Limit error inspection to tree-sitter changed ranges, their containing blocks, a small surrounding recovery region, and explicitly tracked unresolved errors instead of recursively scanning the complete syntax tree after every token.
+  - Add long-stream benchmarks and recovery correctness tests to prevent quadratic checkpoint-copying and full-tree-scan regressions.
 
 ---
 

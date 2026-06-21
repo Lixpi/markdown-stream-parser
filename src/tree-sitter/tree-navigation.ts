@@ -1,5 +1,5 @@
 import type { Node } from 'web-tree-sitter'
-import { BLOCK_TYPES } from './types.js'
+import { BLOCK_TYPES } from './types.ts'
 
 // Find the deepest node in the BLOCK tree that contains the given position.
 // Uses exclusive end: position must be strictly less than endIndex.

@@ -1,5 +1,5 @@
 import type { Parser, Tree, Node } from 'web-tree-sitter'
-import { findActiveNodeAtPosition, findInlineNodeAtPosition } from './tree-navigation.js'
+import { findActiveNodeAtPosition, findInlineNodeAtPosition } from './tree-navigation.ts'
 
 // Check if there's a complete inline_link that overlaps with the given range.
 export function hasCompleteLinkAt(inlineRoot: Node, startPos: number, endPos: number): boolean {

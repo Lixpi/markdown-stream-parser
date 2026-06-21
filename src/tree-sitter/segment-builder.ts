@@ -7,7 +7,7 @@ import type {
     OpenSpan,
     ClosedSpan,
     ParserConfig
-} from './types.js'
+} from './types.ts'
 
 // ============================================================================
 // UTF-16 OFFSET UTILITIES
