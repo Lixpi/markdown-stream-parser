@@ -91,9 +91,19 @@ export type Chunk = {
     // offset onwards and replace with this chunk + subsequent chunks.
     backtrackOffset?: number
 
+    // Present when a configured recovery window prevented complete replay.
+    recovery?: RecoveryInfo
+
     // Original markdown source (only if includeRawStreamedToken config is true).
     // Useful as fallback when parser messes up or for unsupported formats.
     original?: string
+}
+
+export type RecoveryInfo = {
+    type: 'window_overflow'
+    windowSize: number
+    fullBacktrackOffset: number
+    appliedBacktrackOffset: number
 }
 
 // Stream status wrapper for chunks.

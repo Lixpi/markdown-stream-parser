@@ -145,6 +145,7 @@
                 backtrackOffset: chunk.backtrackOffset,
                 chunkText: chunk.text,
                 chunkOffset: chunk.offset,
+                recovery: chunk.recovery,
                 discarding: parsedSegments
                   .filter(
                     (seg) =>
@@ -156,6 +157,13 @@
                     seg.status === "STREAMING" ? seg.chunk.text : null,
                   ),
               });
+
+              if (chunk.recovery?.type === "window_overflow") {
+                console.warn(
+                  "⚠️ Recovery exceeded windowSize; only the bounded suffix was replaced.",
+                  chunk.recovery,
+                );
+              }
 
               parsedSegments = parsedSegments.filter((seg) => {
                 if (seg.status !== "STREAMING") return true;

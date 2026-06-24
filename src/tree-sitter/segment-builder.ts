@@ -6,6 +6,7 @@ import type {
     BlockType,
     OpenSpan,
     ClosedSpan,
+    RecoveryInfo,
     ParserConfig
 } from './types.ts'
 
@@ -110,6 +111,7 @@ export function createChunk(
         closing?: ClosedSpan[]
         contained?: ClosedSpan[]
         backtrackOffset?: number
+        recovery?: RecoveryInfo
         original?: string
     }
 ): Chunk {
@@ -122,6 +124,7 @@ export function createChunk(
         closing: options?.closing ?? [],
         contained: options?.contained ?? [],
         backtrackOffset: options?.backtrackOffset,
+        recovery: options?.recovery,
         original: options?.original,
     }
 }
@@ -144,6 +147,7 @@ export function createChunkFromBlockInfo(
         closing?: ClosedSpan[]
         contained?: ClosedSpan[]
         backtrackOffset?: number
+        recovery?: RecoveryInfo
         original?: string
     }
 ): StreamingChunk {

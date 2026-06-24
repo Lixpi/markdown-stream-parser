@@ -163,7 +163,15 @@ type Chunk = {
     closing: ClosedSpan[]
     contained: ClosedSpan[]
     backtrackOffset?: number
+    recovery?: RecoveryInfo
     original?: string
+}
+
+type RecoveryInfo = {
+    type: 'window_overflow'
+    windowSize: number
+    fullBacktrackOffset: number
+    appliedBacktrackOffset: number
 }
 ```
 
@@ -293,7 +301,7 @@ const config = parser.getConfig()
 | `includeRawStreamedToken` | `boolean` | `false` | Adds the associated raw Markdown source to `chunk.original`. |
 | `windowSize` | `number` | `undefined` | Requests a maximum correction distance in rendered UTF-16 code units. See the recovery limitation below. |
 
-`setConfig()` performs a shallow merge, so omitted properties retain their values.
+`windowSize` must be finite and greater than or equal to `0`; invalid values throw `RangeError`. `setConfig()` performs a shallow merge, so omitted properties retain their values.
 
 ## Supported Markdown
 
@@ -325,9 +333,17 @@ Escaped inline markers pass through the delimiter logic, but escaping behavior d
 
 ### Recovery Window
 
-`windowSize` is measured in rendered UTF-16 code units. The parser does not expose a recovery-limit event when the structurally valid checkpoint is older than the configured window. It may choose a later checkpoint to remain inside the window, which can omit part of a structural correction.
+`windowSize` is measured in rendered UTF-16 code units. When a complete correction would require replay before `lastEmittedOffset - windowSize`, the parser chooses the earliest stored checkpoint inside the configured window and attaches recovery metadata to the first replacement chunk:
 
-Leave `windowSize` undefined when a consumer requires complete recovery. A strict contract needs to select a checkpoint at or before the earliest affected source position and report or explicitly replace output when that checkpoint exceeds the consumer's window.
+```typescript
+if (chunk.recovery?.type === 'window_overflow') {
+    console.warn('Correction was truncated to the configured window', chunk.recovery)
+}
+```
+
+`recovery.fullBacktrackOffset` is where complete replay would have started. `recovery.appliedBacktrackOffset` equals `chunk.backtrackOffset` and is the bounded offset consumers should apply. Output before `appliedBacktrackOffset` may remain stale because the parser did not ask the consumer to discard outside the configured window.
+
+Leave `windowSize` undefined when a consumer requires complete recovery.
 
 ### Recovery Coverage
 

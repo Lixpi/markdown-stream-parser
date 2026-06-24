@@ -877,7 +877,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
     it('should respect windowSize configuration', async () => {
       const windowInstanceId = 'test-window-size'
       const windowParser = await MarkdownStreamParser.getInstance(windowInstanceId, {
-        windowSize: 5,
+        windowSize: 500,
       })
 
       const windowChunks: Chunk[] = []
@@ -904,11 +904,73 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
           const lastEmitted = Math.max(...priorChunks.map(c => c.offset + c.length))
           const distance = lastEmitted - btChunk.backtrackOffset!
           // The backtrack distance should not exceed windowSize
-          expect(distance).toBeLessThanOrEqual(5)
+          expect(distance).toBeLessThanOrEqual(500)
         }
+
+        expect(btChunk.recovery).toBeUndefined()
       }
 
       MarkdownStreamParser.removeInstance(windowInstanceId)
+    })
+
+    it('should report recovery metadata when required correction exceeds windowSize', async () => {
+      const windowInstanceId = 'test-window-size-overflow'
+      const windowParser = await MarkdownStreamParser.getInstance(windowInstanceId, {
+        windowSize: 256,
+      })
+
+      const windowChunks: Chunk[] = []
+      windowParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING' && chunk.chunk) {
+          windowChunks.push(chunk.chunk)
+        }
+      })
+
+      windowParser.startParsing()
+
+      const columnCount = 40
+      const headerCells = Array.from({ length: columnCount }, (_, i) => `column${i}`).join(' | ')
+      const delimiterCells = Array.from({ length: columnCount }, () => '---').join(' | ')
+      windowParser.parseToken(`| ${headerCells} |\n`)
+      windowParser.parseToken(`| ${delimiterCells} |\n`)
+      windowParser.stopParsing()
+
+      const overflowChunk = windowChunks.find(c => c.recovery?.type === 'window_overflow')
+      expect(overflowChunk).toBeDefined()
+      expect(overflowChunk?.backtrackOffset).toBeDefined()
+
+      const overflowIdx = windowChunks.indexOf(overflowChunk!)
+      const priorChunks = windowChunks.slice(0, overflowIdx).filter(c => c.backtrackOffset === undefined)
+      expect(priorChunks.length).toBeGreaterThan(0)
+
+      const lastEmitted = Math.max(...priorChunks.map(c => c.offset + c.length))
+      expect(overflowChunk!.backtrackOffset!).toBeGreaterThanOrEqual(lastEmitted - 256)
+      expect(overflowChunk!.recovery).toMatchObject({
+        type: 'window_overflow',
+        windowSize: 256,
+        appliedBacktrackOffset: overflowChunk!.backtrackOffset,
+      })
+      expect(overflowChunk!.recovery!.fullBacktrackOffset).toBeLessThan(overflowChunk!.recovery!.appliedBacktrackOffset)
+
+      MarkdownStreamParser.removeInstance(windowInstanceId)
+    })
+
+    it('should reject invalid windowSize configuration', async () => {
+      await expect(MarkdownStreamParser.getInstance('test-window-size-negative', {
+        windowSize: -1,
+      })).rejects.toThrow(RangeError)
+
+      await expect(MarkdownStreamParser.getInstance('test-window-size-nan', {
+        windowSize: NaN,
+      })).rejects.toThrow(RangeError)
+
+      await expect(MarkdownStreamParser.getInstance('test-window-size-infinity', {
+        windowSize: Infinity,
+      })).rejects.toThrow(RangeError)
+
+      expect(() => parser.setConfig({ windowSize: -1 })).toThrow(RangeError)
+      expect(() => parser.setConfig({ windowSize: NaN })).toThrow(RangeError)
+      expect(() => parser.setConfig({ windowSize: Infinity })).toThrow(RangeError)
     })
 
     it('should backtrack using rendered offsets after preceding markdown syntax', async () => {

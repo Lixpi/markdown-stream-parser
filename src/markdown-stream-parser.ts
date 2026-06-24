@@ -8,6 +8,7 @@ export type {
     BlockType,
     BlockContext,
     Chunk,
+    RecoveryInfo,
     StreamingChunk,
     ParserConfig,
 } from './tree-sitter-markdown-stream-parser.ts'

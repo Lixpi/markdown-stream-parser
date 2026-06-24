@@ -1,8 +1,20 @@
 import { Parser, Language, type Tree, type Node } from 'web-tree-sitter'
 import TokensStreamBuffer from './tokens-stream-buffer.ts'
-import type { StreamingChunk, ParserConfig, SegmentGeneratorState } from './tree-sitter/types.ts'
+import type {
+    Chunk,
+    RecoveryInfo,
+    StreamingChunk,
+    ParserConfig,
+    SegmentGeneratorCheckpoint,
+    SegmentGeneratorState
+} from './tree-sitter/types.ts'
 import { generateSegments, createInitialState, stateFromCheckpoint } from './tree-sitter/segment-generator.ts'
 
+type RecoverySelection = {
+    requiredCheckpoint: SegmentGeneratorCheckpoint
+    appliedCheckpoint: SegmentGeneratorCheckpoint
+    recovery?: RecoveryInfo
+}
 
 // Re-export types for external consumers
 export type {
@@ -13,6 +25,7 @@ export type {
     BlockType,
     BlockContext,
     Chunk,
+    RecoveryInfo,
     StreamingChunk,
     ParserConfig
 } from './tree-sitter/types.ts'
@@ -74,6 +87,8 @@ export class MarkdownStreamParser {
     // instanceId - Unique identifier for the parser instance
     // config - Optional parser configuration
     static async getInstance(instanceId: string, config?: ParserConfig): Promise<MarkdownStreamParser> {
+        MarkdownStreamParser.validateConfig(config)
+
         // Initialize parser and language once for all instances
         if (!MarkdownStreamParser.parserInitialized) {
             if (!MarkdownStreamParser.parserInitPromise) {
@@ -85,7 +100,7 @@ export class MarkdownStreamParser {
         if (!MarkdownStreamParser.instances.has(instanceId)) {
             const instance = new MarkdownStreamParser()
             if (config) {
-                instance.config = config
+                instance.config = { ...config }
             }
             await instance.initialize()
             MarkdownStreamParser.instances.set(instanceId, instance)
@@ -170,6 +185,16 @@ export class MarkdownStreamParser {
         }
     }
 
+    private static validateConfig(config?: ParserConfig): void {
+        if (config?.windowSize === undefined) {
+            return
+        }
+
+        if (!Number.isFinite(config.windowSize) || config.windowSize < 0) {
+            throw new RangeError('windowSize must be a finite number greater than or equal to 0')
+        }
+    }
+
     constructor() {
         this.tokensStreamProcessor = new TokensStreamBuffer()
     }
@@ -193,7 +218,9 @@ export class MarkdownStreamParser {
     // Update parser configuration.
     // config - New parser configuration
     setConfig(config: ParserConfig): void {
-        this.config = { ...this.config, ...config }
+        const nextConfig = { ...this.config, ...config }
+        MarkdownStreamParser.validateConfig(nextConfig)
+        this.config = nextConfig
     }
 
     // Get current parser configuration.
@@ -367,7 +394,8 @@ export class MarkdownStreamParser {
         }
 
         if (affectedSourceOffset !== undefined) {
-            const checkpoint = this.findRecoveryCheckpoint(affectedSourceOffset)
+            const recoverySelection = this.selectRecoveryCheckpoint(affectedSourceOffset)
+            const checkpoint = recoverySelection.appliedCheckpoint
             let state: SegmentGeneratorState = stateFromCheckpoint(checkpoint)
             let backtrackOffset = checkpoint.renderedOffset
 
@@ -401,6 +429,7 @@ export class MarkdownStreamParser {
                 const firstSeg = allBacktrackSegments[0]
                 if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
                     firstSeg.chunk.backtrackOffset = backtrackOffset
+                    firstSeg.chunk.recovery = recoverySelection.recovery
                 }
             } else if (backtrackOffset < this.generatorState.lastEmittedOffset) {
                 allBacktrackSegments.push({
@@ -414,6 +443,7 @@ export class MarkdownStreamParser {
                         closing: [],
                         contained: [],
                         backtrackOffset,
+                        recovery: recoverySelection.recovery,
                     }
                 })
             }
@@ -442,8 +472,8 @@ export class MarkdownStreamParser {
         return result.segments
     }
 
-    private findRecoveryCheckpoint(sourceOffset: number): SegmentGeneratorState['checkpoints'][number] {
-        const baseCheckpoint: SegmentGeneratorState['checkpoints'][number] = {
+    private selectRecoveryCheckpoint(sourceOffset: number): RecoverySelection {
+        const baseCheckpoint: SegmentGeneratorCheckpoint = {
             sourceOffset: 0,
             renderedOffset: 0,
             lastEmittedSourceOffset: 0,
@@ -455,29 +485,44 @@ export class MarkdownStreamParser {
         }
 
         const checkpoints = this.generatorState.checkpoints.length > 0
-            ? this.generatorState.checkpoints
+            ? [baseCheckpoint, ...this.generatorState.checkpoints]
             : [baseCheckpoint]
 
-        let checkpoint = baseCheckpoint
+        let requiredCheckpoint = baseCheckpoint
         for (const candidate of checkpoints) {
-            if (candidate.sourceOffset <= sourceOffset && candidate.sourceOffset >= checkpoint.sourceOffset) {
-                checkpoint = candidate
+            if (candidate.sourceOffset <= sourceOffset && candidate.sourceOffset >= requiredCheckpoint.sourceOffset) {
+                requiredCheckpoint = candidate
             }
         }
 
-        if (this.config.windowSize !== undefined) {
-            const windowStart = Math.max(0, this.generatorState.lastEmittedOffset - this.config.windowSize)
-            if (checkpoint.renderedOffset < windowStart) {
-                for (const candidate of checkpoints) {
-                    if (candidate.renderedOffset >= windowStart) {
-                        checkpoint = candidate
-                        break
-                    }
-                }
+        if (this.config.windowSize === undefined) {
+            return {
+                requiredCheckpoint,
+                appliedCheckpoint: requiredCheckpoint,
             }
         }
 
-        return checkpoint
+        const windowStart = Math.max(0, this.generatorState.lastEmittedOffset - this.config.windowSize)
+        if (requiredCheckpoint.renderedOffset >= windowStart) {
+            return {
+                requiredCheckpoint,
+                appliedCheckpoint: requiredCheckpoint,
+            }
+        }
+
+        const appliedCheckpoint = checkpoints.find(candidate => candidate.renderedOffset >= windowStart)
+            ?? checkpoints[checkpoints.length - 1]
+
+        return {
+            requiredCheckpoint,
+            appliedCheckpoint,
+            recovery: {
+                type: 'window_overflow',
+                windowSize: this.config.windowSize,
+                fullBacktrackOffset: requiredCheckpoint.renderedOffset,
+                appliedBacktrackOffset: appliedCheckpoint.renderedOffset,
+            },
+        }
     }
 
     private findEarliestErrorOffset(): number | undefined {
