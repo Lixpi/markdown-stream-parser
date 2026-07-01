@@ -93,6 +93,9 @@ export function createBlockContext(blockInfo: BlockInfo): BlockContext {
     if (blockInfo.language !== undefined) {
         context.language = blockInfo.language
     }
+    if (blockInfo.list !== undefined) {
+        context.list = blockInfo.list
+    }
 
     return context
 }

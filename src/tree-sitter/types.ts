@@ -55,6 +55,16 @@ export type BlockContext = {
     level?: number
     // For code blocks: language identifier
     language?: string
+    // For content inside a Markdown list item.
+    list?: ListMetadata
+}
+
+export type ListMetadata = {
+    type: 'ordered' | 'unordered'
+    depth: number
+    marker: '-' | '+' | '*' | '.' | ')'
+    ordinal?: number
+    task?: { checked: boolean }
 }
 
 // ============================================================================
@@ -156,6 +166,7 @@ export const BLOCK_TYPES = [
 export const SUPPRESSED_SYNTAX_TYPES = [
     'list_marker_minus', 'list_marker_plus', 'list_marker_star',
     'list_marker_dot', 'list_marker_parenthesis',
+    'task_list_marker_checked', 'task_list_marker_unchecked',
     '|'  // Table pipe delimiters
 ] as const
 
@@ -174,6 +185,7 @@ export type BlockInfo = {
     type: string
     level?: number
     language?: string
+    list?: ListMetadata
     id?: number
 }
 

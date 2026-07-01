@@ -1,10 +1,12 @@
 import type { Node } from 'web-tree-sitter'
 import { HEADER_MARKER_LEVELS, type BlockInfo, type BlockState } from './types.ts'
 import { findBlockNode } from './tree-navigation.ts'
+import { getListMetadata } from './list-support.ts'
 
 // Get the block type and properties from a tree-sitter node.
 // Walks up the tree to find the enclosing block structure.
 export function getBlockInfo(node: Node): BlockInfo {
+    const list = getListMetadata(node)
     let current: Node | null = node
     let foundParagraph = false
     let foundTableCell = false
@@ -15,7 +17,8 @@ export function getBlockInfo(node: Node): BlockInfo {
             case 'atx_heading':
                 return {
                     type: 'header',
-                    level: getHeadingLevel(current)
+                    level: getHeadingLevel(current),
+                    list,
                 }
             case 'paragraph':
                 // Don't return immediately - check if we're inside a list_item or blockquote
@@ -24,14 +27,15 @@ export function getBlockInfo(node: Node): BlockInfo {
             case 'fenced_code_block':
                 return {
                     type: 'codeBlock',  // camelCase for consistency
-                    language: getCodeBlockLanguage(current)
+                    language: getCodeBlockLanguage(current),
+                    list,
                 }
             case 'list_item':
                 // If we found a paragraph inside a list_item, return list_item
-                return { type: 'list_item' }
+                return { type: 'list_item', list }
             case 'blockquote':
                 // If we found a paragraph inside a blockquote, return blockquote
-                return { type: 'blockquote' }
+                return { type: 'blockquote', list }
             // Table types
             case 'pipe_table_cell':
                 foundTableCell = true
@@ -40,22 +44,22 @@ export function getBlockInfo(node: Node): BlockInfo {
                 isInHeader = true
                 // If we found a cell inside a header, return table_header_cell
                 if (foundTableCell) {
-                    return { type: 'table_header_cell', id: current.id }
+                    return { type: 'table_header_cell', id: current.id, list }
                 }
                 break
             case 'pipe_table_row':
                 // If we found a cell inside a regular row, return table_cell
                 if (foundTableCell) {
-                    return { type: 'table_cell', id: current.id }
+                    return { type: 'table_cell', id: current.id, list }
                 }
                 break
             case 'pipe_table':
                 // Found the table - if we have a cell, determine type based on header flag
                 if (foundTableCell) {
-                    return { type: isInHeader ? 'table_header_cell' : 'table_cell', id: current.id }
+                    return { type: isInHeader ? 'table_header_cell' : 'table_cell', id: current.id, list }
                 }
                 // Otherwise just return table
-                return { type: 'table' }
+                return { type: 'table', list }
         }
 
         current = current.parent
@@ -63,10 +67,10 @@ export function getBlockInfo(node: Node): BlockInfo {
 
     // If we found a paragraph but no enclosing list_item/blockquote, return paragraph
     if (foundParagraph) {
-        return { type: 'paragraph' }
+        return { type: 'paragraph', list }
     }
 
-    return { type: 'paragraph' }
+    return { type: 'paragraph', list }
 }
 
 // Check if the given node represents a new block compared to the current block state.

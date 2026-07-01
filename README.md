@@ -192,10 +192,19 @@ type BlockContext = {
         | 'blockquote'
     level?: number
     language?: string
+    list?: {
+        type: 'ordered' | 'unordered'
+        depth: number
+        marker: '-' | '+' | '*' | '.' | ')'
+        ordinal?: number
+        task?: { checked: boolean }
+    }
 }
 ```
 
 `level` applies to headings. `language` contains the info string detected on a fenced code block.
+
+`list` is present when the chunk is inside a list item. `depth` is zero-based. Unordered items use `marker` for the bullet character (`-`, `+`, or `*`). Ordered items use `marker` for the delimiter only (`.` or `)`) and put the number in `ordinal` when it is safely representable as a JavaScript number. Task list items omit the `[x]`, `[X]`, or `[ ]` marker from rendered text and expose `task.checked`.
 
 When `includeRawStreamedToken` is enabled, `original` contains the raw Markdown source associated with the emitted chunk. It is separate from the rendered UTF-16 coordinate space.
 
@@ -309,7 +318,7 @@ The parser handles these structures in its exercised parsing paths:
 
 - Paragraphs and ATX headings (`#` through `######`)
 - Fenced code blocks with language detection
-- Ordered and unordered list items
+- Ordered, unordered, nested, loose, and task list items
 - Bold, italic, bold-italic, strikethrough, and inline code spans
 - Pipe-table cells and delimiter suppression for covered table forms
 
@@ -319,7 +328,6 @@ These structures are incomplete or unsupported:
 
 - Blockquote marker stripping and nested blockquotes
 - Full table behavior across all valid table shapes
-- Task lists
 - Horizontal rules
 - Footnotes
 - HTML blocks
