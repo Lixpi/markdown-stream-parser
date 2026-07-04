@@ -54,7 +54,7 @@ export function utf16ToByteOffset(text: string, utf16Offset: number): number {
 // ============================================================================
 
 // Map internal block type strings to BlockType enum.
-function mapBlockType(type: string): BlockType {
+export function mapBlockType(type: string): BlockType {
     switch (type) {
         case 'header':
         case 'atx_heading':

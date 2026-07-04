@@ -347,20 +347,21 @@ Leave `windowSize` undefined when a consumer requires complete recovery.
 
 ### Recovery Coverage
 
-Recovery is covered for table and code-fence reclassification, rendered offsets, raw source output, and bounded lookback behavior. Dedicated cases are still needed for:
+Recovery is covered for table and code-fence reclassification, rendered offsets, raw source output, bounded lookback behavior, and deletion-only corrections. Dedicated cases are still needed for:
 
 - Inline delimiter replay with opening and closing spans
-- Corrections that only delete stale rendered output
 
 ### Long Streams
 
-Checkpoint history is copied as segments are emitted and searched linearly during recovery. Error detection also traverses the syntax tree after streamed input. These paths can accumulate disproportionate work as a document grows.
+Checkpoint history is copied as segments are emitted and searched linearly during recovery. Error detection walks only errored syntax subtrees, and replaced tree-sitter trees are released as the document changes. These paths can still accumulate disproportionate work as a document grows.
 
 Long uninterrupted input is emitted in bounded chunks by the token buffer, but output can still be delayed until the buffer reaches its internal threshold or receives whitespace.
 
 ## Runtime Design
 
 The parser maintains one block syntax tree and one inline parser per instance. Incoming strings pass through a token buffer before incremental parsing. Generated chunks carry rendered offsets, while internal state also retains source offsets for replay.
+
+When incremental parsing succeeds, the parser compares changed ranges against the prior syntax tree, then releases the replaced tree. If parsing does not produce a replacement tree, the parser keeps the existing tree so the next chunk can continue from a valid parser state.
 
 ```mermaid
 flowchart LR
@@ -402,7 +403,7 @@ Recorded streams live under `demo/llm-streams-examples`. JSON files preserve chu
 ```bash
 docker exec -it lixpi-markdown-stream-parser-demo \
     pnpm run debug-parser-tree-sitter \
-    --file=demo/llm-streams-examples/claude-3.5-long-regex.json
+    --file=claude-3.5-long-regex.json
 ```
 
 Create a chunked JSON stream from a text fixture:
@@ -417,9 +418,9 @@ docker exec -it lixpi-markdown-stream-parser-demo \
 
 ## Development Priorities
 
-Recovery work focuses on a strict `windowSize` overflow contract, inline-span replay coverage, and deletion-only correction coverage.
+Recovery work focuses on a strict `windowSize` overflow contract and inline-span replay coverage.
 
-Scaling work focuses on stable-boundary checkpoints, pruning and indexed lookup, parser-internal checkpoint storage, changed-subtree error inspection, tracked unresolved errors, and long-stream benchmarks.
+Scaling work focuses on stable-boundary checkpoints, indexed lookup, parser-internal checkpoint storage, tracked unresolved errors, and long-stream benchmarks.
 
 Markdown coverage work focuses on the incomplete structures listed in [Supported Markdown](#supported-markdown).
 

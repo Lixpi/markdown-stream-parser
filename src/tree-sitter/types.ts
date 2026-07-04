@@ -267,9 +267,6 @@ export type SegmentGeneratorState = {
     // Start index for pending inline content
     pendingInlineStartIndex?: number
 
-    // Accumulated content for backtrack reference
-    accumulatedContent: string
-
     // Stable replay points used to translate source recovery ranges to rendered offsets.
     checkpoints: SegmentGeneratorCheckpoint[]
 }
@@ -283,5 +280,4 @@ export type SegmentGeneratorCheckpoint = {
     currentBlock: BlockState | null
     pendingInlineContent: string
     pendingInlineStartIndex?: number
-    accumulatedContent: string
 }
