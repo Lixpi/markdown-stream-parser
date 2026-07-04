@@ -24,6 +24,7 @@ import {
     isInsideCodeBlock
 } from './inline-detection.ts'
 import { getHeaderContent, getCodeBlockContent, getInlineContent } from './content-extraction.ts'
+import { isInsideTableDelimiterRow } from './table-support.ts'
 import {
     createChunkFromBlockInfo,
     createPlainTextChunk,
@@ -567,19 +568,14 @@ export function generateSegments(
     }
 
     // Check if we're inside a table delimiter row
-    let currentForDelimiter: Node | null = nodeAtPosition
-    while (currentForDelimiter) {
-        if (currentForDelimiter.type === 'pipe_table_delimiter_row' ||
-            currentForDelimiter.type === 'pipe_table_delimiter_cell') {
-            state = {
-                ...state,
-                sourceOffset: actualToIndex,
-                accumulatedContent: state.accumulatedContent + newContent
-            }
-            state = withCheckpoint(state)
-            return { segments, state }
+    if (isInsideTableDelimiterRow(nodeAtPosition)) {
+        state = {
+            ...state,
+            sourceOffset: actualToIndex,
+            accumulatedContent: state.accumulatedContent + newContent
         }
-        currentForDelimiter = currentForDelimiter.parent
+        state = withCheckpoint(state)
+        return { segments, state }
     }
 
     // Determine the block type and properties

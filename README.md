@@ -188,6 +188,7 @@ type BlockContext = {
         | 'list_item'
         | 'table'
         | 'table_row'
+        | 'table_header_cell'
         | 'table_cell'
         | 'blockquote'
     level?: number
@@ -199,12 +200,23 @@ type BlockContext = {
         ordinal?: number
         task?: { checked: boolean }
     }
+    table?: {
+        tableId: string
+        rowIndex: number
+        columnIndex: number
+        cellId: string
+        align?: 'left' | 'center' | 'right'
+    }
 }
 ```
 
 `level` applies to headings. `language` contains the info string detected on a fenced code block.
 
 `list` is present when the chunk is inside a list item. `depth` is zero-based. Unordered items use `marker` for the bullet character (`-`, `+`, or `*`). Ordered items use `marker` for the delimiter only (`.` or `)`) and put the number in `ordinal` when it is safely representable as a JavaScript number. Task list items omit the `[x]`, `[X]`, or `[ ]` marker from rendered text and expose `task.checked`.
+
+`table` is present when the chunk is inside a table cell. `tableId` identifies the enclosing table, `rowIndex` is zero-based with the header row at `0`, `columnIndex` is zero-based within the row, `cellId` is a stable `${tableId}:${rowIndex}:${columnIndex}` grouping key, and `align` reflects the parsed delimiter row when specified.
+
+Compatibility note: header cell chunks now use `block.type === 'table_header_cell'`. Consumers that previously treated all table header content as `table_cell` should update that branch.
 
 When `includeRawStreamedToken` is enabled, `original` contains the raw Markdown source associated with the emitted chunk. It is separate from the rendered UTF-16 coordinate space.
 

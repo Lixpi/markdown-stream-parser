@@ -38,6 +38,26 @@ function applyBacktracks(chunks: Chunk[]): Chunk[] {
   return activeChunks
 }
 
+async function parseMarkdownInChunks(instanceId: string, markdown: string, chunkSize: number): Promise<Chunk[]> {
+  const parser = await MarkdownStreamParser.getInstance(instanceId)
+  const chunks: Chunk[] = []
+
+  parser.subscribeToTokenParse((chunk) => {
+    if (chunk.status === 'STREAMING' && chunk.chunk) {
+      chunks.push(chunk.chunk)
+    }
+  })
+
+  parser.startParsing()
+  for (let index = 0; index < markdown.length; index += chunkSize) {
+    parser.parseToken(markdown.slice(index, index + chunkSize))
+  }
+  parser.stopParsing()
+  MarkdownStreamParser.removeInstance(instanceId)
+
+  return chunks
+}
+
 describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
   let parser: MarkdownStreamParser
   let parsedChunks: Chunk[] = []
@@ -954,7 +974,7 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(after?.offset).toBe('code\n'.length)
     })
   })
-  describe('Table Inline Code', () => {
+  describe('Table Support', () => {
     it('should strip backticks from inline code inside tables', async () => {
       parser.parseToken('| Col | `code` |\n')
       parser.stopParsing()
@@ -974,12 +994,12 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       parser.parseToken('| 1 | 2 |\n')
       parser.stopParsing()
 
-      // Should have table-related chunks
-      const tableChunks = parsedChunks.filter(c =>
-        c.block.type === 'table' || c.block.type === 'table_row' || c.block.type === 'table_cell'
-      )
+      const activeChunks = applyBacktracks(parsedChunks)
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+      const bodyChunks = activeChunks.filter(c => c.block.type === 'table_cell')
 
-      expect(tableChunks.length).toBeGreaterThan(0)
+      expect(headerChunks.length).toBeGreaterThan(0)
+      expect(bodyChunks.length).toBeGreaterThan(0)
     })
 
     it('should suppress pipe delimiters from output', async () => {
@@ -1019,6 +1039,152 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       // Code should be stripped of backticks
       const hasStrippedCode = codeChunks.some(c => c.text.trim() === 'code')
       expect(hasStrippedCode).toBe(true)
+    })
+
+    it('should expose header/body table metadata and alignments', async () => {
+      parser.parseToken('| Left | Center | Right | Plain |\n')
+      parser.parseToken('| :--- | :---: | ---: | --- |\n')
+      parser.parseToken('| a | b | c | d |\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+      const bodyChunks = activeChunks.filter(c => c.block.type === 'table_cell')
+
+      expect(headerChunks.length).toBeGreaterThan(0)
+      expect(bodyChunks.length).toBeGreaterThan(0)
+
+      const leftHeader = headerChunks.find(c => c.text.includes('Left'))
+      const centerHeader = headerChunks.find(c => c.text.includes('Center'))
+      const rightHeader = headerChunks.find(c => c.text.includes('Right'))
+      const plainHeader = headerChunks.find(c => c.text.includes('Plain'))
+      const bodyCell = bodyChunks.find(c => c.text.trim() === 'c')
+
+      expect(leftHeader?.block.table?.rowIndex).toBe(0)
+      expect(leftHeader?.block.table?.columnIndex).toBe(0)
+      expect(leftHeader?.block.table?.align).toBe('left')
+      expect(centerHeader?.block.table?.align).toBe('center')
+      expect(rightHeader?.block.table?.align).toBe('right')
+      expect(plainHeader?.block.table?.align).toBeUndefined()
+
+      expect(bodyCell?.block.table?.rowIndex).toBe(1)
+      expect(bodyCell?.block.table?.columnIndex).toBe(2)
+      expect(bodyCell?.block.table?.cellId).toBe(
+        `${bodyCell?.block.table?.tableId}:1:2`
+      )
+    })
+
+    it('should keep table parsing stable across small streaming chunk sizes', async () => {
+      const markdown = '| A | B |\n| --- | --- |\n| New York | 42 |\n'
+
+      for (const chunkSize of [1, 2, 3]) {
+        const chunks = await parseMarkdownInChunks(`table-stream-${chunkSize}`, markdown, chunkSize)
+        const activeChunks = applyBacktracks(chunks)
+        const rendered = activeChunks.map(c => c.text).join('')
+
+        expect(rendered).toContain('A')
+        expect(rendered).toContain('B')
+        expect(rendered).toContain('New York')
+        expect(rendered).not.toContain('|')
+        expect(rendered).not.toContain('---')
+
+        const tableCells = activeChunks.filter(c => c.block.type === 'table_header_cell' || c.block.type === 'table_cell')
+        expect(tableCells.length).toBeGreaterThan(0)
+        expect(new Set(tableCells.map(c => c.block.table?.tableId)).size).toBe(1)
+
+        // "New York" is two words; when split across chunks it may land in
+        // multiple emitted pieces, but they must all share one cellId so
+        // consumers can group them back into a single rendered cell.
+        const cityChunks = tableCells.filter(c => c.text.includes('New') || c.text.includes('York'))
+        expect(cityChunks.length).toBeGreaterThan(0)
+        expect(new Set(cityChunks.map(c => c.block.table?.cellId)).size).toBe(1)
+      }
+    })
+
+    it('should carry table metadata for a table at the very start of the stream', async () => {
+      parser.parseToken('| A |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| 1 |\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const tableChunks = activeChunks.filter(
+        c => c.block.type === 'table_header_cell' || c.block.type === 'table_cell'
+      )
+
+      expect(tableChunks.length).toBeGreaterThan(0)
+      expect(tableChunks.every(c => typeof c.block.table?.tableId === 'string')).toBe(true)
+    })
+
+    it('should carry table metadata for a table at the very end of the stream with no trailing newline', async () => {
+      parser.parseToken('| A |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| 1 |')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const tableChunks = activeChunks.filter(
+        c => c.block.type === 'table_header_cell' || c.block.type === 'table_cell'
+      )
+
+      expect(tableChunks.length).toBeGreaterThan(0)
+      expect(tableChunks.some(c => c.text.includes('1'))).toBe(true)
+    })
+
+    it('should not bleed paragraph metadata into a following table', async () => {
+      parser.parseToken('Some intro text.\n')
+      parser.parseToken('\n')
+      parser.parseToken('| A |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| B |\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const paragraphChunks = activeChunks.filter(c => c.block.type === 'paragraph')
+      const tableChunks = activeChunks.filter(
+        c => c.block.type === 'table_header_cell' || c.block.type === 'table_cell'
+      )
+
+      expect(paragraphChunks.length).toBeGreaterThan(0)
+      expect(tableChunks.length).toBeGreaterThan(0)
+      expect(tableChunks.every(c => c.block.list === undefined)).toBe(true)
+      expect(tableChunks.every(c => typeof c.block.table?.tableId === 'string')).toBe(true)
+    })
+
+    it('should not bleed list metadata into a following table', async () => {
+      parser.parseToken('- item\n')
+      parser.parseToken('\n')
+      parser.parseToken('| A |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| B |\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const tableChunks = activeChunks.filter(
+        c => c.block.type === 'table_header_cell' || c.block.type === 'table_cell'
+      )
+
+      expect(tableChunks.length).toBeGreaterThan(0)
+      expect(tableChunks.every(c => c.block.list === undefined)).toBe(true)
+    })
+
+    it('should assign different tableId and cellId values to adjacent tables', async () => {
+      parser.parseToken('| A |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| 1 |\n')
+      parser.parseToken('\n')
+      parser.parseToken('| B |\n')
+      parser.parseToken('| --- |\n')
+      parser.parseToken('| 2 |\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+      const tableIds = new Set(headerChunks.map(c => c.block.table?.tableId))
+      const cellIds = new Set(headerChunks.map(c => c.block.table?.cellId))
+
+      expect(tableIds.size).toBe(2)
+      expect(cellIds.size).toBe(2)
     })
   })
 
@@ -1061,6 +1227,14 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(typeof firstBacktrack.backtrackOffset).toBe('number')
       expect(firstBacktrack.backtrackOffset!).toBeGreaterThanOrEqual(0)
 
+      const activeChunks = applyBacktracks(tableChunks)
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+      expect(headerChunks.length).toBeGreaterThan(0)
+      const headerText = headerChunks.map(c => c.text).join('')
+      expect(headerText).toContain('Col A')
+      expect(headerText).toContain('Col B')
+      expect(headerChunks.every(c => c.block.table?.rowIndex === 0)).toBe(true)
+
       MarkdownStreamParser.removeInstance(tableId)
     })
 
@@ -1102,6 +1276,46 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(fullText).toContain('Name')
       expect(fullText).toContain('Age')
       expect(fullText).toContain('Alice')
+
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+      expect(headerChunks.length).toBeGreaterThan(0)
+      expect(headerChunks.every(c => c.block.table?.rowIndex === 0)).toBe(true)
+
+      MarkdownStreamParser.removeInstance(tableId)
+    })
+
+    it('should re-emit header chunks with alignment metadata after table reclassification', async () => {
+      const tableId = 'test-table-reemit-align'
+      const tableParser = await MarkdownStreamParser.getInstance(tableId)
+      const tableChunks: Chunk[] = []
+
+      tableParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING' && chunk.chunk) {
+          tableChunks.push(chunk.chunk)
+        }
+      })
+
+      tableParser.startParsing()
+      tableParser.parseToken('| Left | Center | Right |\n')
+      tableParser.parseToken('| :--- | :---: | ---: |\n')
+      tableParser.parseToken('| a | b | c |\n')
+      tableParser.stopParsing()
+
+      const backtrackChunks = tableChunks.filter(c => c.backtrackOffset !== undefined)
+      expect(backtrackChunks.length).toBeGreaterThan(0)
+
+      const activeChunks = applyBacktracks(tableChunks)
+      const headerChunks = activeChunks.filter(c => c.block.type === 'table_header_cell')
+
+      expect(headerChunks.length).toBeGreaterThan(0)
+
+      const leftHeader = headerChunks.find(c => c.text.includes('Left'))
+      const centerHeader = headerChunks.find(c => c.text.includes('Center'))
+      const rightHeader = headerChunks.find(c => c.text.includes('Right'))
+
+      expect(leftHeader?.block.table?.align).toBe('left')
+      expect(centerHeader?.block.table?.align).toBe('center')
+      expect(rightHeader?.block.table?.align).toBe('right')
 
       MarkdownStreamParser.removeInstance(tableId)
     })

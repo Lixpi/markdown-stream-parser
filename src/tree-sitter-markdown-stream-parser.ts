@@ -24,6 +24,8 @@ export type {
     ClosedSpan,
     BlockType,
     BlockContext,
+    TableAlignment,
+    TableMetadata,
     Chunk,
     RecoveryInfo,
     StreamingChunk,
