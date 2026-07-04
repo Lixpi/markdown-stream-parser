@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MarkdownStreamParser } from './tree-sitter-markdown-stream-parser'
-import type { Chunk, ClosedSpan, SpanType } from './tree-sitter/types.ts'
+import type { Chunk, ClosedSpan, SpanType, StreamingChunk } from './tree-sitter/types.ts'
 import { getListMetadata } from './tree-sitter/list-support.ts'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -56,6 +56,18 @@ async function parseMarkdownInChunks(instanceId: string, markdown: string, chunk
   MarkdownStreamParser.removeInstance(instanceId)
 
   return chunks
+}
+
+function processRawChunk(parser: MarkdownStreamParser, chunk: string): StreamingChunk[] {
+  return (parser as unknown as { processRawChunk(chunk: string): StreamingChunk[] }).processRawChunk(chunk)
+}
+
+function processRawAndCollect(parser: MarkdownStreamParser, chunk: string, chunks: Chunk[]): void {
+  for (const segment of processRawChunk(parser, chunk)) {
+    if (segment.status === 'STREAMING') {
+      chunks.push(segment.chunk)
+    }
+  }
 }
 
 describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
@@ -1477,6 +1489,87 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
       expect(rawChunks.some(c => c.original?.includes('Name'))).toBe(true)
 
       MarkdownStreamParser.removeInstance(rawId)
+    })
+
+    it('should recover from the errored subtree instead of replaying the full document', async () => {
+      const recoveryId = 'test-error-offset-subtree'
+      const recoveryParser = await MarkdownStreamParser.getInstance(recoveryId)
+      const recoveryChunks: Chunk[] = []
+
+      recoveryParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          recoveryChunks.push(chunk.chunk)
+        }
+      })
+
+      recoveryParser.startParsing()
+      processRawAndCollect(recoveryParser, 'Intro text\n\n', recoveryChunks)
+      processRawAndCollect(recoveryParser, '# [', recoveryChunks)
+      processRawAndCollect(recoveryParser, ']', recoveryChunks)
+      recoveryParser.stopParsing()
+
+      const backtrack = recoveryChunks.find(c => c.backtrackOffset !== undefined)
+      expect(backtrack).toBeDefined()
+      expect(backtrack!.backtrackOffset).toBeGreaterThan(0)
+      expect(backtrack!.backtrackOffset).toBeLessThanOrEqual('Intro text\n\n'.length)
+
+      MarkdownStreamParser.removeInstance(recoveryId)
+    })
+
+    it('should emit deletion-only recovery chunks when replay produces no replacement segments', async () => {
+      const recoveryId = 'test-deletion-only-recovery'
+      const recoveryParser = await MarkdownStreamParser.getInstance(recoveryId)
+      const recoveryChunks: Chunk[] = []
+
+      recoveryParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          recoveryChunks.push(chunk.chunk)
+        }
+      })
+
+      recoveryParser.startParsing()
+      processRawAndCollect(recoveryParser, 'Intro\n\n', recoveryChunks)
+      processRawAndCollect(recoveryParser, '# [foo', recoveryChunks)
+      processRawAndCollect(recoveryParser, ']', recoveryChunks)
+      recoveryParser.stopParsing()
+
+      const deletion = recoveryChunks.find(c =>
+        c.backtrackOffset !== undefined &&
+        c.text === '' &&
+        c.length === 0
+      )
+
+      expect(deletion).toBeDefined()
+      expect(deletion!.backtrackOffset).toBe('Intro\n\n'.length)
+
+      MarkdownStreamParser.removeInstance(recoveryId)
+    })
+
+    it('should preserve older checkpoints across successive recoveries', async () => {
+      const recoveryId = 'test-successive-recovery-checkpoints'
+      const recoveryParser = await MarkdownStreamParser.getInstance(recoveryId)
+      const recoveryChunks: Chunk[] = []
+
+      recoveryParser.subscribeToTokenParse((chunk) => {
+        if (chunk.status === 'STREAMING') {
+          recoveryChunks.push(chunk.chunk)
+        }
+      })
+
+      recoveryParser.startParsing()
+      recoveryParser.parseToken('Intro\n\n')
+      recoveryParser.parseToken('| Name | Age |\n')
+      recoveryParser.parseToken('| --- | --- |\n')
+      recoveryParser.parseToken('\n# ')
+      recoveryParser.parseToken('[')
+      recoveryParser.parseToken('heading](https://example.com)\n')
+      recoveryParser.stopParsing()
+
+      const backtracks = recoveryChunks.filter(c => c.backtrackOffset !== undefined)
+      expect(backtracks.length).toBeGreaterThanOrEqual(2)
+      expect(backtracks[1].backtrackOffset).toBeGreaterThan(0)
+
+      MarkdownStreamParser.removeInstance(recoveryId)
     })
   })
 

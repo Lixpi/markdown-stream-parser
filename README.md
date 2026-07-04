@@ -212,7 +212,11 @@ type BlockContext = {
 
 `level` applies to headings. `language` contains the info string detected on a fenced code block.
 
-`list` is present when the chunk is inside a list item. `depth` is zero-based. Unordered items use `marker` for the bullet character (`-`, `+`, or `*`). Ordered items use `marker` for the delimiter only (`.` or `)`) and put the number in `ordinal` when it is safely representable as a JavaScript number. Task list items omit the `[x]`, `[X]`, or `[ ]` marker from rendered text and expose `task.checked`.
+`list` is present when the chunk is inside a list item, including nested blocks such as fenced code blocks contained by a list item. `depth` is zero-based: top-level items use `0`, and nested items use `1` or greater.
+
+For unordered items, `marker` is the bullet character from the source: `-`, `+`, or `*`. For ordered items, `marker` is the delimiter only: `.` or `)`. The list number is exposed separately as `ordinal` when it is safely representable as a JavaScript number, so `10.` becomes `{ ordinal: 10, marker: '.' }`.
+
+Task list items omit the checkbox marker and following space from rendered text. `[x]` and `[X]` produce `task: { checked: true }`; `[ ]` produces `task: { checked: false }`.
 
 `table` is present when the chunk is inside a table cell. `tableId` identifies the enclosing table, `rowIndex` is zero-based with the header row at `0`, `columnIndex` is zero-based within the row, `cellId` is a stable `${tableId}:${rowIndex}:${columnIndex}` grouping key, and `align` reflects the parsed delimiter row when specified.
 
@@ -332,11 +336,22 @@ The parser handles these structures in its exercised parsing paths:
 
 - Paragraphs and ATX headings (`#` through `######`)
 - Fenced code blocks with language detection
-- Ordered, unordered, nested, loose, and task list items
+- Ordered list items with `.` and `)` delimiters
+- Unordered list items with `-`, `+`, and `*` markers
+- Nested and loose list items
+- Task list items with checked and unchecked state
 - Bold, italic, bold-italic, strikethrough, and inline code spans
 - Pipe tables with header-cell detection, delimiter suppression, alignment metadata, and stable per-cell grouping keys for covered table forms
 
 Link and image span extraction is implemented, including URL and image metadata, but dedicated coverage is still needed for those paths.
+
+### Lists
+
+List marker syntax is removed from `text`. Consumers should use `block.list` to render bullets, ordered numbers, nesting, and task state instead of parsing the original Markdown source.
+
+List metadata is attached to all chunks emitted inside a list item. A fenced code block inside a list keeps `block.type === 'code_block'` and also receives `block.list`, so consumers can preserve list indentation while rendering the nested block with its natural block type.
+
+The parser removes structural list indentation from rendered output. Rendered list item text keeps meaningful content newlines, including blank lines in loose lists and the trailing newline at the end of an item.
 
 These structures are incomplete or unsupported:
 
@@ -369,20 +384,21 @@ Leave `windowSize` undefined when a consumer requires complete recovery.
 
 ### Recovery Coverage
 
-Recovery is covered for table and code-fence reclassification, rendered offsets, raw source output, and bounded lookback behavior. Dedicated cases are still needed for:
+Recovery is covered for table and code-fence reclassification, rendered offsets, raw source output, bounded lookback behavior, and deletion-only corrections. Dedicated cases are still needed for:
 
 - Inline delimiter replay with opening and closing spans
-- Corrections that only delete stale rendered output
 
 ### Long Streams
 
-Checkpoint history is copied as segments are emitted and searched linearly during recovery. Error detection also traverses the syntax tree after streamed input. These paths can accumulate disproportionate work as a document grows.
+Checkpoint history is copied as segments are emitted and searched linearly during recovery. Error detection walks only errored syntax subtrees, and replaced tree-sitter trees are released as the document changes. These paths can still accumulate disproportionate work as a document grows.
 
 Long uninterrupted input is emitted in bounded chunks by the token buffer, but output can still be delayed until the buffer reaches its internal threshold or receives whitespace.
 
 ## Runtime Design
 
 The parser maintains one block syntax tree and one inline parser per instance. Incoming strings pass through a token buffer before incremental parsing. Generated chunks carry rendered offsets, while internal state also retains source offsets for replay.
+
+When incremental parsing succeeds, the parser compares changed ranges against the prior syntax tree, then releases the replaced tree. If parsing does not produce a replacement tree, the parser keeps the existing tree so the next chunk can continue from a valid parser state.
 
 ```mermaid
 flowchart LR
@@ -424,7 +440,7 @@ Recorded streams live under `demo/llm-streams-examples`. JSON files preserve chu
 ```bash
 docker exec -it lixpi-markdown-stream-parser-demo \
     pnpm run debug-parser-tree-sitter \
-    --file=demo/llm-streams-examples/claude-3.5-long-regex.json
+    --file=claude-3.5-long-regex.json
 ```
 
 Create a chunked JSON stream from a text fixture:
@@ -439,9 +455,9 @@ docker exec -it lixpi-markdown-stream-parser-demo \
 
 ## Development Priorities
 
-Recovery work focuses on a strict `windowSize` overflow contract, inline-span replay coverage, and deletion-only correction coverage.
+Recovery work focuses on a strict `windowSize` overflow contract and inline-span replay coverage.
 
-Scaling work focuses on stable-boundary checkpoints, pruning and indexed lookup, parser-internal checkpoint storage, changed-subtree error inspection, tracked unresolved errors, and long-stream benchmarks.
+Scaling work focuses on stable-boundary checkpoints, indexed lookup, parser-internal checkpoint storage, tracked unresolved errors, and long-stream benchmarks.
 
 Markdown coverage work focuses on the incomplete structures listed in [Supported Markdown](#supported-markdown).
 
