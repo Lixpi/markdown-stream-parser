@@ -9,6 +9,7 @@ import type {
     SegmentGeneratorState
 } from './tree-sitter/types.ts'
 import { generateSegments, createInitialState, stateFromCheckpoint } from './tree-sitter/segment-generator.ts'
+import { mapBlockType } from './tree-sitter/segment-builder.ts'
 
 type RecoverySelection = {
     requiredCheckpoint: SegmentGeneratorCheckpoint
@@ -53,7 +54,6 @@ export class MarkdownStreamParser {
     private parser: Parser | null = null
     private inlineParser: Parser | null = null
     private currentTree: Tree | null = null
-    private previousTree: Tree | null = null
 
     // Configuration
     private config: ParserConfig = {}
@@ -61,6 +61,7 @@ export class MarkdownStreamParser {
     // Content state
     private content: string = ''
     private lastProcessedIndex: number = 0
+    private endPosition: { row: number; column: number } = { row: 0, column: 0 }
     private allSegments: StreamingChunk[] = []
 
     // Segment generator state
@@ -293,11 +294,16 @@ export class MarkdownStreamParser {
 
         if (this.generatorState.pendingInlineContent) {
             const text = this.generatorState.pendingInlineContent
+            const currentBlock = this.generatorState.currentBlock
             const chunk: Chunk = {
                 text,
                 offset: this.generatorState.totalUtf16Offset,
                 length: text.length,
-                block: { type: 'paragraph' },
+                block: {
+                    type: currentBlock ? mapBlockType(currentBlock.type) : 'paragraph',
+                    level: currentBlock?.level,
+                    language: currentBlock?.language,
+                },
                 opening: [],
                 closing: [],
                 contained: [],
@@ -311,7 +317,6 @@ export class MarkdownStreamParser {
                 lastEmittedSourceOffset: this.generatorState.sourceOffset,
                 pendingInlineContent: '',
                 pendingInlineStartIndex: undefined,
-                accumulatedContent: this.generatorState.accumulatedContent + text,
             }
 
             const streamingChunk: StreamingChunk = { status: 'STREAMING', chunk }
@@ -337,30 +342,22 @@ export class MarkdownStreamParser {
         }
 
         const oldLength = this.content.length
+        const oldEndPosition = this.endPosition
         this.content += chunk
         this.lastProcessedIndex = this.content.length
+        this.endPosition = this.advancePosition(oldEndPosition, chunk)
 
-        // Store previous tree for change detection
-        this.previousTree = this.currentTree
+        const previousTree = this.currentTree
 
         // For proper incremental parsing, tell tree-sitter what changed
         if (this.currentTree) {
-            const getPosition = (index: number) => {
-                const textUpToIndex = this.content.substring(0, Math.min(index, this.content.length))
-                const lines = textUpToIndex.split('\n')
-                return {
-                    row: lines.length - 1,
-                    column: lines[lines.length - 1].length
-                }
-            }
-
             this.currentTree.edit({
                 startIndex: oldLength,
                 oldEndIndex: oldLength,
                 newEndIndex: this.content.length,
-                startPosition: getPosition(oldLength),
-                oldEndPosition: getPosition(oldLength),
-                newEndPosition: getPosition(this.content.length)
+                startPosition: oldEndPosition,
+                oldEndPosition,
+                newEndPosition: this.endPosition
             })
         }
 
@@ -374,8 +371,8 @@ export class MarkdownStreamParser {
 
         // Detect backtracking by checking changed source ranges.
         let affectedSourceOffset: number | undefined
-        if (this.previousTree && this.currentTree) {
-            const changedRanges = this.previousTree.getChangedRanges(this.currentTree)
+        if (previousTree && this.currentTree) {
+            const changedRanges = previousTree.getChangedRanges(this.currentTree)
 
             for (const range of changedRanges) {
                 // range.startIndex is already a UTF-16 character offset in web-tree-sitter JS bindings
@@ -387,6 +384,7 @@ export class MarkdownStreamParser {
                 }
             }
         }
+        previousTree?.delete()
 
         const errorSourceOffset = this.findEarliestErrorOffset()
         if (errorSourceOffset !== undefined && errorSourceOffset < this.generatorState.lastEmittedSourceOffset) {
@@ -396,7 +394,13 @@ export class MarkdownStreamParser {
         if (affectedSourceOffset !== undefined) {
             const recoverySelection = this.selectRecoveryCheckpoint(affectedSourceOffset)
             const checkpoint = recoverySelection.appliedCheckpoint
+            const priorCheckpoints = this.generatorState.checkpoints
+            const preRecoveryLastEmittedOffset = this.generatorState.lastEmittedOffset
             let state: SegmentGeneratorState = stateFromCheckpoint(checkpoint)
+            state = {
+                ...state,
+                checkpoints: this.restoreCheckpointHistory(priorCheckpoints, checkpoint),
+            }
             let backtrackOffset = checkpoint.renderedOffset
 
             // Re-generate all segments from backtrack point through end of content.
@@ -431,7 +435,7 @@ export class MarkdownStreamParser {
                     firstSeg.chunk.backtrackOffset = backtrackOffset
                     firstSeg.chunk.recovery = recoverySelection.recovery
                 }
-            } else if (backtrackOffset < this.generatorState.lastEmittedOffset) {
+            } else if (backtrackOffset < preRecoveryLastEmittedOffset) {
                 allBacktrackSegments.push({
                     status: 'STREAMING',
                     chunk: {
@@ -481,7 +485,6 @@ export class MarkdownStreamParser {
             openSpans: [],
             currentBlock: null,
             pendingInlineContent: '',
-            accumulatedContent: '',
         }
 
         const checkpoints = this.generatorState.checkpoints.length > 0
@@ -528,19 +531,68 @@ export class MarkdownStreamParser {
     private findEarliestErrorOffset(): number | undefined {
         if (!this.currentTree) return undefined
 
-        let earliest: number | undefined
-        const visit = (node: Node) => {
-            if (node.hasError || node.isError || node.isMissing) {
-                earliest = Math.min(earliest ?? Infinity, node.startIndex)
+        let earliestConcrete: number | undefined
+        let fallback: { offset: number; width: number; depth: number } | undefined
+
+        const visit = (node: Node, depth: number): boolean => {
+            if (!node.hasError && !node.isError && !node.isMissing) {
+                return false
             }
 
-            for (const child of node.children) {
-                visit(child)
+            if (node.isError || node.isMissing) {
+                earliestConcrete = Math.min(earliestConcrete ?? Infinity, node.startIndex)
+                return true
             }
+
+            let recordedChild = false
+            for (const child of node.children) {
+                recordedChild = visit(child, depth + 1) || recordedChild
+            }
+
+            if (!recordedChild) {
+                const candidate = {
+                    offset: node.startIndex,
+                    width: node.endIndex - node.startIndex,
+                    depth,
+                }
+                if (
+                    !fallback ||
+                    candidate.depth > fallback.depth ||
+                    (candidate.depth === fallback.depth && candidate.width < fallback.width) ||
+                    (candidate.depth === fallback.depth && candidate.width === fallback.width && candidate.offset < fallback.offset)
+                ) {
+                    fallback = candidate
+                }
+                return true
+            }
+
+            return true
         }
 
-        visit(this.currentTree.rootNode)
-        return earliest
+        visit(this.currentTree.rootNode, 0)
+        return earliestConcrete ?? fallback?.offset
+    }
+
+    private restoreCheckpointHistory(
+        priorCheckpoints: SegmentGeneratorCheckpoint[],
+        selectedCheckpoint: SegmentGeneratorCheckpoint
+    ): SegmentGeneratorCheckpoint[] {
+        const checkpoints = priorCheckpoints
+            .filter(checkpoint => checkpoint.sourceOffset <= selectedCheckpoint.sourceOffset)
+
+        const selectedIndex = checkpoints.findIndex(checkpoint =>
+            checkpoint.sourceOffset === selectedCheckpoint.sourceOffset &&
+            checkpoint.renderedOffset === selectedCheckpoint.renderedOffset
+        )
+
+        const restored = selectedIndex === -1
+            ? [...checkpoints, selectedCheckpoint]
+            : checkpoints.map((checkpoint, index) => index === selectedIndex ? selectedCheckpoint : checkpoint)
+
+        return restored.sort((a, b) =>
+            a.sourceOffset - b.sourceOffset ||
+            a.renderedOffset - b.renderedOffset
+        )
     }
 
 
@@ -586,6 +638,22 @@ export class MarkdownStreamParser {
         return char === ' ' || char === '\t' || char === '\n' || char === '\r'
     }
 
+    private advancePosition(position: { row: number; column: number }, text: string): { row: number; column: number } {
+        let row = position.row
+        let column = position.column
+
+        for (const char of text) {
+            if (char === '\n') {
+                row += 1
+                column = 0
+            } else {
+                column += char.length
+            }
+        }
+
+        return { row, column }
+    }
+
     // Get the current accumulated content.
     getCurrentContent(): string {
         return this.content
@@ -622,8 +690,9 @@ export class MarkdownStreamParser {
     // Reset the parser state.
     reset(): void {
         this.content = ''
+        this.currentTree?.delete()
         this.currentTree = null
-        this.previousTree = null
+        this.endPosition = { row: 0, column: 0 }
         this.lastProcessedIndex = 0
         this.allSegments = []
         this.generatorState = createInitialState()

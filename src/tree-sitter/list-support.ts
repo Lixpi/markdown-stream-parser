@@ -175,6 +175,11 @@ function collectSuppressedRanges(
         return
     }
 
+    if (isListMarkerType(node.type)) {
+        ranges.push({ start: node.startIndex, end: node.endIndex })
+        return
+    }
+
     if (isListScopedBlockContinuation(node)) {
         ranges.push({ start: node.startIndex, end: node.endIndex })
         return

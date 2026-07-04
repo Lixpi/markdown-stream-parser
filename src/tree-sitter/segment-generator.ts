@@ -59,7 +59,6 @@ export function createInitialState(): SegmentGeneratorState {
         openSpans: [],
         currentBlock: null,
         pendingInlineContent: '',
-        accumulatedContent: '',
         checkpoints: []
     }
 }
@@ -74,7 +73,6 @@ export function createCheckpoint(state: SegmentGeneratorState): SegmentGenerator
         currentBlock: state.currentBlock ? { ...state.currentBlock } : null,
         pendingInlineContent: state.pendingInlineContent,
         pendingInlineStartIndex: state.pendingInlineStartIndex,
-        accumulatedContent: state.accumulatedContent,
     }
 }
 
@@ -88,7 +86,6 @@ export function stateFromCheckpoint(checkpoint: SegmentGeneratorState['checkpoin
         currentBlock: checkpoint.currentBlock ? { ...checkpoint.currentBlock } : null,
         pendingInlineContent: checkpoint.pendingInlineContent,
         pendingInlineStartIndex: checkpoint.pendingInlineStartIndex,
-        accumulatedContent: checkpoint.accumulatedContent,
         checkpoints: [checkpoint],
     }
 }
@@ -304,6 +301,7 @@ function processInlineSpans(
     chunkEndRaw: number,
     content: string,
     state: SegmentGeneratorState,
+    delimiterRanges: Array<{ start: number; end: number }>,
     baseRenderedOffset: number
 ): { opening: OpenSpan[]; closing: ClosedSpan[]; contained: ClosedSpan[]; newOpenSpans: OpenSpan[] } {
     const opening: OpenSpan[] = []
@@ -311,7 +309,6 @@ function processInlineSpans(
     const contained: ClosedSpan[] = []
     const newOpenSpans = [...state.openSpans]
     const indicesToRemove: number[] = []
-    const delimiterRanges = collectInlineDelimiterRanges(inlineTree)
 
     const styleNodeTypes = ['code_span', 'strong_emphasis', 'emphasis', 'strikethrough', 'inline_link', 'image']
 
@@ -500,7 +497,6 @@ export function generateSegments(
             lastEmittedOffset: chunkStartUtf16 + newContent.length,
             sourceOffset: actualToIndex,
             lastEmittedSourceOffset: actualToIndex,
-            accumulatedContent: state.accumulatedContent + newContent
         }
         state = withCheckpoint(state)
         return { segments: [chunk], state }
@@ -515,11 +511,9 @@ export function generateSegments(
 
     if (leadingSuppressedRange) {
         const suppressedEnd = leadingSuppressedRange.end
-        const suppressedPrefix = content.substring(actualFromIndex, suppressedEnd)
         state = {
             ...state,
             sourceOffset: suppressedEnd,
-            accumulatedContent: state.accumulatedContent + suppressedPrefix
         }
 
         if (suppressedEnd >= actualToIndex) {
@@ -536,11 +530,9 @@ export function generateSegments(
 
     if (isListScopedBlockContinuation(nodeAtPosition)) {
         const continuationEnd = Math.min(nodeAtPosition.endIndex, actualToIndex)
-        const suppressedPrefix = content.substring(actualFromIndex, continuationEnd)
         state = {
             ...state,
             sourceOffset: continuationEnd,
-            accumulatedContent: state.accumulatedContent + suppressedPrefix
         }
 
         if (continuationEnd >= actualToIndex) {
@@ -560,7 +552,6 @@ export function generateSegments(
         state = {
             ...state,
             sourceOffset: actualToIndex,
-            accumulatedContent: state.accumulatedContent + newContent
         }
         state = withCheckpoint(state)
         return { segments, state }
@@ -574,7 +565,6 @@ export function generateSegments(
             state = {
                 ...state,
                 sourceOffset: actualToIndex,
-                accumulatedContent: state.accumulatedContent + newContent
             }
             state = withCheckpoint(state)
             return { segments, state }
@@ -609,7 +599,6 @@ export function generateSegments(
             state = {
                 ...state,
                 sourceOffset: actualToIndex,
-                accumulatedContent: state.accumulatedContent + newContent
             }
             state = withCheckpoint(state)
             return { segments, state }
@@ -627,7 +616,6 @@ export function generateSegments(
             state = {
                 ...state,
                 sourceOffset: actualToIndex,
-                accumulatedContent: state.accumulatedContent + newContent
             }
             state = withCheckpoint(state)
             return { segments, state }
@@ -638,7 +626,6 @@ export function generateSegments(
             state = {
                 ...state,
                 sourceOffset: actualToIndex,
-                accumulatedContent: state.accumulatedContent + newContent
             }
             state = withCheckpoint(state)
             return { segments, state }
@@ -651,11 +638,14 @@ export function generateSegments(
     let closing: ClosedSpan[] = []
     let contained: ClosedSpan[] = []
     let strippedContent = processedContent
+    let usedInlineContent = false
 
     if (blockInfo.type !== 'codeBlock' && inlineParser) {
         const hostInlineNode = findInlineNodeAtPosition(currentTree.rootNode, actualFromIndex)
+        usedInlineContent = hostInlineNode !== null
         const inlineContent = hostInlineNode?.text ?? processedContent
         const inlineTree = inlineParser.parse(inlineContent)
+        const delimiterRanges = collectInlineDelimiterRanges(inlineTree)
         const chunkStartInInline = hostInlineNode
             ? Math.max(0, actualFromIndex - hostInlineNode.startIndex)
             : 0
@@ -669,7 +659,8 @@ export function generateSegments(
             chunkEndInInline,
             inlineContent,
             state,
-            chunkStartUtf16 - rawToRenderedOffset(chunkStartInInline, collectInlineDelimiterRanges(inlineTree))
+            delimiterRanges,
+            chunkStartUtf16 - rawToRenderedOffset(chunkStartInInline, delimiterRanges)
         )
         opening = spanResult.opening
         closing = spanResult.closing
@@ -689,6 +680,16 @@ export function generateSegments(
             const tailText = content.substring(tailStart, actualToIndex)
             strippedContent += stripListSuppressedRanges(tailText, currentTree.rootNode, content, tailStart, actualToIndex)
         }
+    }
+
+    if (blockInfo.type !== 'codeBlock' && !usedInlineContent) {
+        strippedContent = stripListSuppressedRanges(
+            strippedContent,
+            currentTree.rootNode,
+            content,
+            actualFromIndex,
+            actualToIndex
+        )
     }
 
     // Create the chunk with the new API
@@ -712,7 +713,6 @@ export function generateSegments(
         lastEmittedOffset: chunkStartUtf16 + strippedContent.length,
         sourceOffset: actualToIndex,
         lastEmittedSourceOffset: actualToIndex,
-        accumulatedContent: state.accumulatedContent + newContent,
         currentBlock: {
             type: blockInfo.type,
             level: blockInfo.level,
