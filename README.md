@@ -216,6 +216,8 @@ type BlockContext = {
 
 `table` is present when the chunk is inside a table cell. `tableId` identifies the enclosing table, `rowIndex` is zero-based with the header row at `0`, `columnIndex` is zero-based within the row, `cellId` is a stable `${tableId}:${rowIndex}:${columnIndex}` grouping key, and `align` reflects the parsed delimiter row when specified.
 
+Chunks are streamed at content boundaries, not at Markdown table-cell boundaries. One Markdown cell can produce multiple chunks. Consumers that need to rebuild a visual table should group chunks by `block.table.tableId`, then by `rowIndex`, then by `cellId`.
+
 Compatibility note: header cell chunks now use `block.type === 'table_header_cell'`. Consumers that previously treated all table header content as `table_cell` should update that branch.
 
 When `includeRawStreamedToken` is enabled, `original` contains the raw Markdown source associated with the emitted chunk. It is separate from the rendered UTF-16 coordinate space.
@@ -332,14 +334,14 @@ The parser handles these structures in its exercised parsing paths:
 - Fenced code blocks with language detection
 - Ordered, unordered, nested, loose, and task list items
 - Bold, italic, bold-italic, strikethrough, and inline code spans
-- Pipe-table cells and delimiter suppression for covered table forms
+- Pipe tables with header-cell detection, delimiter suppression, alignment metadata, and stable per-cell grouping keys for covered table forms
 
 Link and image span extraction is implemented, including URL and image metadata, but dedicated coverage is still needed for those paths.
 
 These structures are incomplete or unsupported:
 
 - Blockquote marker stripping and nested blockquotes
-- Full table behavior across all valid table shapes
+- Full coverage for every valid Markdown table shape
 - Horizontal rules
 - Footnotes
 - HTML blocks
