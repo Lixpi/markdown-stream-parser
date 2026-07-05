@@ -10,50 +10,100 @@ export default class TokensStreamBuffer {
     }
 
     public processBufferForCompletion() {
-        const pattern = /(\s*\S+\s+|\s*\S+((\n|\\n)+))/g
-        let match
-        let lastIndex = 0
+        // Find complete word segments without using regex
+        // Original pattern behavior: (\s*\S+\s+|\s*\S+((\n|\\n)+))
+        // This means: optional leading whitespace + word + trailing whitespace/newlines
+        let lastEmittedIndex = 0
+        let i = 0
 
-        // Use exec() since it provides indices, which we use to slice the buffer correctly
-        while ((match = pattern.exec(this.buffer)) !== null) {
-            const matchObject = (([
-                fullMatch,
-                prefixedWhitespace,
-                content,
-                postfixedWhitespace
-            ]) => ({
-                fullMatch: fullMatch || '',
-                prefixedWhitespace: prefixedWhitespace || '',
-                content: content || '',
-                postfixedWhitespace: postfixedWhitespace || '',
-            }))(match || [])
+        while (i < this.buffer.length) {
+            // Skip leading whitespace (will be included with the word)
+            const segmentStart = i
+            while (i < this.buffer.length && this.isWhitespaceChar(this.buffer[i])) {
+                i++
+            }
 
-            lastIndex = match.index + matchObject.fullMatch.length    // Calculate the index of the end of the match
+            // If we only have whitespace left, stop (don't emit orphan whitespace)
+            if (i >= this.buffer.length) {
+                break
+            }
 
-            this.notifyWordCompletion(matchObject.fullMatch)    // Emit the word
+            // Consume non-whitespace characters (the word)
+            while (i < this.buffer.length && !this.isWhitespaceChar(this.buffer[i])) {
+                // Check for escaped newline sequence "\\n" within non-whitespace
+                if (this.buffer[i] === '\\' && i + 1 < this.buffer.length && this.buffer[i + 1] === 'n') {
+                    // Include the escaped newline and emit
+                    i += 2
+                    const segment = this.buffer.slice(lastEmittedIndex, i)
+                    this.notifyWordCompletion(segment)
+                    lastEmittedIndex = i
+                    // Continue to next iteration
+                    break
+                }
+                i++
+            }
+
+            // Check if we broke out due to escaped newline
+            if (lastEmittedIndex === i) {
+                continue
+            }
+
+            // If we're at end of buffer with no trailing whitespace, stop (incomplete word)
+            if (i >= this.buffer.length) {
+                break
+            }
+
+            // Consume ALL trailing whitespace (one or more required for emission)
+            const trailingStart = i
+            while (i < this.buffer.length && this.isWhitespaceChar(this.buffer[i])) {
+                i++
+            }
+
+            // Emit the segment: from lastEmittedIndex to end of ALL trailing whitespace
+            const segment = this.buffer.slice(lastEmittedIndex, i)
+            this.notifyWordCompletion(segment)
+            lastEmittedIndex = i
         }
 
-        // Update the buffer by slicing off the processed part
-        if (lastIndex > 0) {
-            this.buffer = this.buffer.slice(lastIndex)
+        // Update the buffer by removing the processed part
+        if (lastEmittedIndex > 0) {
+            this._buffer = this.buffer.slice(lastEmittedIndex)
         }
 
         // Handle long sequences without whitespace to prevent infinite buffer growth
-        // If buffer is too long and contains only non-whitespace characters, emit chunks to prevent freezing
-        const MAX_BUFFER_SIZE = 100; // Reasonable limit for streaming UX
-        if (this.buffer.length > MAX_BUFFER_SIZE && !/\s/.test(this.buffer)) {
-            // Split the buffer into chunks and emit them
-            const CHUNK_SIZE = 50; // Emit in reasonable chunks
+        const MAX_BUFFER_SIZE = 100
+        if (this.buffer.length > MAX_BUFFER_SIZE && !this.hasWhitespace(this.buffer)) {
+            const CHUNK_SIZE = 50
             while (this.buffer.length > CHUNK_SIZE) {
-                const chunk = this.buffer.slice(0, CHUNK_SIZE);
-                this.notifyWordCompletion(chunk);
-                this.buffer = this.buffer.slice(CHUNK_SIZE);
+                const chunk = this.buffer.slice(0, CHUNK_SIZE)
+                this.notifyWordCompletion(chunk)
+                this._buffer = this.buffer.slice(CHUNK_SIZE)
             }
         }
     }
 
+    private isWhitespaceChar(char: string): boolean {
+        return char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '\v'
+    }
+
+    private hasWhitespace(text: string): boolean {
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i]
+            if (char === ' ' || char === '\t' || char === '\n' || char === '\r') {
+                return true
+            }
+        }
+        return false
+    }
+
     private notifyWordCompletion(word: string) {
-        this.wordCompleteListeners.forEach(listener => listener(word))
+        this.wordCompleteListeners.forEach(listener => {
+            try {
+                listener(word);
+            } catch (e) {
+                console.error('[TokensStreamBuffer] Listener error for word:', JSON.stringify(word), e);
+            }
+        });
     }
 
     public subscribeToSegmentCompletion(listener: (word: string) => void) {

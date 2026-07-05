@@ -4,6 +4,8 @@ build/
 # Node modules
 node_modules/
 .pnpm-store/
+.npm-cache/
+package-lock.json
 
 # Logs
 npm-debug.log*

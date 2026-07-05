@@ -1,0 +1,14 @@
+## Table Test
+
+| Col A | Col B |
+| --- | --- |
+| cell1 | cell2 |
+
+## Code Fence Test
+
+Some paragraph text here.
+```python
+x = 1
+```
+
+After code.

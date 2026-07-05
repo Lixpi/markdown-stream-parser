@@ -1,239 +1,529 @@
 <script lang="ts">
-import { onMount } from 'svelte';
-// import { MarkdownStreamParser } from '@lixpi/markdown-stream-parser';
-import { MarkdownStreamParser } from '../../../../src/markdown-stream-parser.ts'
+  import { onMount } from "svelte";
+  import {
+    MarkdownStreamParser,
+    type StreamingChunk,
+    type Chunk,
+    type OpenSpan,
+    type ClosedSpan,
+    type SpanType,
+  } from "../../../../src/markdown-stream-parser.ts";
 
-type ExampleFile = { base: string; json: string; txt: string };
+  type ExampleFile = { base: string; json: string; txt: string };
+  type TableAlign = "left" | "center" | "right" | undefined;
+  type TableCellGroup = {
+    cellId: string;
+    columnIndex: number;
+    type: "table_header_cell" | "table_cell";
+    align: TableAlign;
+    chunks: Chunk[];
+  };
+  type TableRowGroup = {
+    rowIndex: number;
+    cells: TableCellGroup[];
+  };
 
-let examples: ExampleFile[] = [];
-let selectedExample: ExampleFile | null = null;
-let delay = 80;
-let streaming = false;
-let paused = false;
-let tokens: string[] = [];
-let txtContent = '';
-let jsonContent = '';
-let parsedSegments: any[] = [];
-let parsedBlocks: any[][] = [];
-let currentToken = '';
-let currentParsedChunks: any[] = []; // Array to hold all parsed chunks for the current token
-let error = '';
-let jsonItems: string[] = []; // Add state for parsed JSON items
-let currentTokenIndex: number | null = null; // Track the index of the current token
-let parser: any = null;
-let parserId: string = '';
+  MarkdownStreamParser.configureWasmPath("/tree-sitter-markdown.wasm");
 
-async function loadExamples() {
-  try {
-    const res = await fetch('/llm-examples-manifest.json');
-    examples = await res.json();
-    selectedExample = examples[0] ?? null;
-  } catch (e) {
-    error = 'Failed to load examples manifest.';
+  let examples: ExampleFile[] = [];
+  let selectedExample: ExampleFile | null = null;
+  let delay = 80;
+  let streaming = false;
+  let paused = false;
+  let tokens: string[] = [];
+  let txtContent = "";
+  let jsonContent = "";
+  let parsedSegments: StreamingChunk[] = [];
+  let parsedBlocks: Chunk[][] = [];
+  let currentToken = "";
+  let currentParsedChunks: StreamingChunk[] = [];
+  let error = "";
+  let jsonItems: string[] = [];
+  let currentTokenIndex: number | null = null;
+  let parserInitialized = false;
+  let parser: MarkdownStreamParser | null = null;
+  let parserId: string = "";
+
+  // Track open spans across chunks for styling
+  let openSpans: OpenSpan[] = [];
+
+  async function loadExamples() {
+    try {
+      const res = await fetch("/llm-examples-manifest.json");
+      examples = await res.json();
+      selectedExample = examples[0] ?? null;
+    } catch (e) {
+      error = "Failed to load examples manifest.";
+    }
   }
-}
 
-async function loadSelectedFiles() {
-  if (!selectedExample) return;
-  try {
-    const [jsonRes, txtRes] = await Promise.all([
-      fetch(selectedExample.json),
-      fetch(selectedExample.txt),
-    ]);
-    tokens = await jsonRes.json();
-    txtContent = await txtRes.text();
-    // Fetch raw JSON as text for display
-    const rawJsonRes = await fetch(selectedExample.json);
-    jsonContent = await rawJsonRes.text();
-  } catch (e) {
-    error = 'Failed to load example files.';
+  async function loadSelectedFiles() {
+    if (!selectedExample) return;
+    try {
+      const [jsonRes, txtRes] = await Promise.all([
+        fetch(selectedExample.json),
+        fetch(selectedExample.txt),
+      ]);
+      tokens = await jsonRes.json();
+      txtContent = await txtRes.text();
+      const rawJsonRes = await fetch(selectedExample.json);
+      jsonContent = await rawJsonRes.text();
+    } catch (e) {
+      error = "Failed to load example files.";
+    }
   }
-}
 
-function handleExampleChange() {
-  resetParser();
-}
+  function handleExampleChange() {
+    resetParser();
+  }
 
-function initializeParser() {
-  parsedSegments = [];
-  currentToken = '';
-  currentParsedChunks = [];
-  currentTokenIndex = null; // Reset index before starting
-  error = '';
+  // Get active span types from open spans and chunk spans
+  function getActiveSpanTypes(chunk: Chunk): SpanType[] {
+    const types: SpanType[] = [];
 
-  parserId = 'demo-' + Date.now();
-  parser = MarkdownStreamParser.getInstance(parserId);
-  parser.startParsing();
-
-  // Add explicit types for parsed and unsubscribe
-  parser.subscribeToTokenParse((parsed: any, unsubscribe: () => void) => {
-    if (parsed.status === 'END_STREAM') {
-      // Add parsed END_STREAM status to parsedSegments
-      parsedSegments = [...parsedSegments, parsed];
-      unsubscribe();
-      MarkdownStreamParser.removeInstance(parserId);
-      streaming = false;
-      paused = false;
-      currentTokenIndex = null; // Remove highlight when stream ends
-      currentToken = ''; // Clear current token display
-    } else {
-      // Add new parsed segment to the list
-      parsedSegments = [...parsedSegments, parsed];
-
-      // For the current token, accumulate all parsed segments
-      if (streaming || paused) {
-        currentParsedChunks = [...currentParsedChunks, parsed];
+    // Add types from contained spans (fully within this chunk)
+    for (const span of chunk.contained) {
+      if (!types.includes(span.type)) {
+        types.push(span.type);
       }
     }
-  });
-}
 
-async function simulateStream() {
-  if (!selectedExample) return;
-
-  // Initialize parser if not already initialized
-  if (!parser || !streaming) {
-    streaming = true;
-    paused = false;
-    initializeParser();
-  }
-
-  for (let i = currentTokenIndex !== null ? currentTokenIndex + 1 : 0; i < tokens.length; i++) {
-    if (!streaming || paused) {
-      if (paused) {
-        currentTokenIndex = i - 1; // Stay at current token when paused
-      } else {
-        currentTokenIndex = null; // Remove highlight if stopped
-        currentToken = ''; // Clear current token if stopped
-        currentParsedChunks = []; // Clear parsed chunks
+    // Add types from opening spans (start in this chunk)
+    for (const span of chunk.opening) {
+      if (!types.includes(span.type)) {
+        types.push(span.type);
       }
-      break;
     }
 
-    // Clear previous parsed chunks for this token
+    // Add types from currently open spans (opened in previous chunks)
+    for (const span of openSpans) {
+      if (!types.includes(span.type)) {
+        types.push(span.type);
+      }
+    }
+
+    return types;
+  }
+
+  // Update open spans tracking based on chunk
+  function updateOpenSpans(chunk: Chunk) {
+    // Remove closed spans
+    for (const closedSpan of chunk.closing) {
+      openSpans = openSpans.filter((s) => s.type !== closedSpan.type);
+    }
+
+    // Add new opening spans
+    for (const openSpan of chunk.opening) {
+      openSpans = [...openSpans, openSpan];
+    }
+  }
+
+  async function initializeParser() {
+    parsedSegments = [];
+    currentToken = "";
     currentParsedChunks = [];
-
-    // Update current token display
-    currentTokenIndex = i; // Highlight the current token index
-    currentToken = tokens[i];
-
-    // Process the token
-    parser.parseToken(tokens[i]);
-
-    // Wait for a moment to allow the parser to emit all segments for this token
-    await new Promise((r) => setTimeout(r, delay));
-  }
-
-  // If we've reached the end of tokens and weren't paused or stopped
-  if (streaming && !paused && currentTokenIndex === tokens.length - 1) {
-    parser.stopParsing();
-    streaming = false;
     currentTokenIndex = null;
-    currentToken = '';
-    currentParsedChunks = [];
-    parser = null;
-  }
-}
+    error = "";
+    openSpans = [];
 
-function pauseStream() {
-  if (streaming && !paused) {
-    paused = true;
-  }
-}
+    parserId = "demo-" + Date.now();
 
-function resumeStream() {
-  if (paused) {
-    paused = false;
-    simulateStream(); // Continue the stream from where it was paused
-  }
-}
+    try {
+      parser = await MarkdownStreamParser.getInstance(parserId);
+      parser.startParsing();
 
-function processNextToken() {
-  if (paused && currentTokenIndex !== null && currentTokenIndex < tokens.length - 1) {
-    const nextIndex = currentTokenIndex + 1;
-    // Clear previous parsed chunks
-    currentParsedChunks = [];
+      parser.subscribeToTokenParse(
+        (parsed: StreamingChunk, unsubscribe: () => void) => {
+          if (parsed.status === "END_STREAM") {
+            parsedSegments = [...parsedSegments, parsed];
+            unsubscribe();
+            MarkdownStreamParser.removeInstance(parserId);
+            streaming = false;
+            paused = false;
+            currentTokenIndex = null;
+            currentToken = "";
+            parser = null;
+            openSpans = [];
+          } else if (parsed.status === "START_STREAM") {
+            parsedSegments = [...parsedSegments, parsed];
+          } else if (parsed.status === "STREAMING") {
+            const chunk = parsed.chunk;
 
-    currentTokenIndex = nextIndex;
-    currentToken = tokens[nextIndex];
-    parser.parseToken(tokens[nextIndex]);
 
-    // If this was the last token, finish the stream
-    if (nextIndex === tokens.length - 1) {
-      parser.stopParsing();
+
+
+            if (chunk.backtrackOffset !== undefined) {
+              console.warn("⚠️ BACKTRACK detected!", {
+                backtrackOffset: chunk.backtrackOffset,
+                chunkText: chunk.text,
+                chunkOffset: chunk.offset,
+                recovery: chunk.recovery,
+                discarding: parsedSegments
+                  .filter(
+                    (seg) =>
+                      seg.status === "STREAMING" &&
+                      seg.chunk.offset + seg.chunk.length >
+                        chunk.backtrackOffset!,
+                  )
+                  .map((seg) =>
+                    seg.status === "STREAMING" ? seg.chunk.text : null,
+                  ),
+              });
+
+              if (chunk.recovery?.type === "window_overflow") {
+                console.warn(
+                  "⚠️ Recovery exceeded windowSize; only the bounded suffix was replaced.",
+                  chunk.recovery,
+                );
+              }
+
+              parsedSegments = parsedSegments.filter((seg) => {
+                if (seg.status !== "STREAMING") return true;
+                return (
+                  seg.chunk.offset + seg.chunk.length <= chunk.backtrackOffset!
+                );
+              });
+
+              openSpans = [];
+            }
+
+            parsedSegments = [...parsedSegments, parsed];
+            updateOpenSpans(parsed.chunk);
+
+            if (streaming || paused) {
+              currentParsedChunks = [...currentParsedChunks, parsed];
+            }
+          }
+        },
+      );
+    } catch (e) {
+      console.error("Failed to initialize parser:", e);
+      error = `Failed to initialize parser: ${e}`;
       streaming = false;
-      paused = false;
       parser = null;
     }
   }
-}
 
-function resetParser() {
-  if (parser) {
-    parser.stopParsing();
-    MarkdownStreamParser.removeInstance(parserId);
-    parser = null;
-  }
+  async function simulateStream() {
+    if (!selectedExample) return;
 
-  parsedSegments = [];
-  parsedBlocks = [];
-  currentToken = '';
-  currentParsedChunks = [];
-  currentTokenIndex = null;
-  streaming = false;
-  paused = false;
-  error = '';
-}
-
-$: parsedBlocks = (() => {
-  const blocks = [];
-  let currentBlock = [];
-  for (const seg of parsedSegments) {
-    if (seg.segment?.isBlockDefining && currentBlock.length) {
-      blocks.push(currentBlock);
-      currentBlock = [];
+    if (!parser || !streaming) {
+      streaming = true;
+      paused = false;
+      await initializeParser();
     }
-    currentBlock.push(seg);
-  }
-  if (currentBlock.length) blocks.push(currentBlock);
-  return blocks;
-})();
 
-onMount(async () => {
-  await loadExamples();
-  await loadSelectedFiles();
-});
+    if (!parser) {
+      error = "Parser initialization failed";
+      return;
+    }
 
-$: if (selectedExample) {
-  loadSelectedFiles();
-}
-
-$: { // Reactive block to parse jsonContent when it changes
-  if (jsonContent) {
-    try {
-      const parsed = JSON.parse(jsonContent);
-      if (Array.isArray(parsed)) {
-        jsonItems = parsed;
-      } else {
-        console.error("Parsed jsonContent is not an array:", parsed);
-        jsonItems = []; // Reset or handle as appropriate
+    for (
+      let i = currentTokenIndex !== null ? currentTokenIndex + 1 : 0;
+      i < tokens.length;
+      i++
+    ) {
+      if (!streaming || paused) {
+        if (paused) {
+          currentTokenIndex = i - 1;
+        } else {
+          currentTokenIndex = null;
+          currentToken = "";
+          currentParsedChunks = [];
+        }
+        break;
       }
-    } catch (e) {
-      console.error("Failed to parse jsonContent:", e);
-      jsonItems = []; // Reset on error
+
+      currentParsedChunks = [];
+      currentTokenIndex = i;
+      currentToken = tokens[i];
+
+      const parseError = parser.parseToken(tokens[i]);
+      if (parseError) {
+        console.error("Parse error:", parseError);
+        error = `Parse error: ${parseError.message}`;
+        break;
+      }
+
+      await new Promise((r) => setTimeout(r, delay));
     }
-  } else {
-    jsonItems = [];
+
+    if (streaming && !paused && currentTokenIndex === tokens.length - 1) {
+      parser.stopParsing();
+      streaming = false;
+      currentTokenIndex = null;
+      currentToken = "";
+      currentParsedChunks = [];
+      parser = null;
+    }
   }
-}
+
+  function pauseStream() {
+    if (streaming && !paused) {
+      paused = true;
+    }
+  }
+
+  function resumeStream() {
+    if (paused) {
+      paused = false;
+      simulateStream();
+    }
+  }
+
+  function processNextToken() {
+    if (
+      paused &&
+      parser &&
+      currentTokenIndex !== null &&
+      currentTokenIndex < tokens.length - 1
+    ) {
+      const nextIndex = currentTokenIndex + 1;
+      currentParsedChunks = [];
+      currentTokenIndex = nextIndex;
+      currentToken = tokens[nextIndex];
+
+      const parseError = parser.parseToken(tokens[nextIndex]);
+      if (parseError) {
+        console.error("Parse error:", parseError);
+        error = `Parse error: ${parseError.message}`;
+        return;
+      }
+
+      if (nextIndex === tokens.length - 1) {
+        parser.stopParsing();
+        streaming = false;
+        paused = false;
+        parser = null;
+      }
+    }
+  }
+
+  function resetParser() {
+    if (parser) {
+      parser.stopParsing();
+      MarkdownStreamParser.removeInstance(parserId);
+      parser = null;
+    }
+
+    parsedSegments = [];
+    parsedBlocks = [];
+    currentToken = "";
+    currentParsedChunks = [];
+    currentTokenIndex = null;
+    streaming = false;
+    paused = false;
+    error = "";
+    openSpans = [];
+  }
+
+  function getTableAlignClass(align: TableAlign): string {
+    if (align === "center") return "text-center";
+    if (align === "right") return "text-right";
+    return "text-left";
+  }
+
+  function getTableCellAlignClass(cell: TableCellGroup): string {
+    if (cell.align) {
+      return getTableAlignClass(cell.align);
+    }
+
+    return cell.type === "table_header_cell" ? "text-center" : "text-left";
+  }
+
+  function buildTableRows(block: Chunk[]): TableRowGroup[] {
+    const rows = new Map<number, Map<string, TableCellGroup>>();
+
+    for (const chunk of block) {
+      const table = chunk.block.table;
+      if (!table) continue;
+
+      let row = rows.get(table.rowIndex);
+      if (!row) {
+        row = new Map<string, TableCellGroup>();
+        rows.set(table.rowIndex, row);
+      }
+
+      let cell = row.get(table.cellId);
+      if (!cell) {
+        cell = {
+          cellId: table.cellId,
+          columnIndex: table.columnIndex,
+          type:
+            chunk.block.type === "table_header_cell"
+              ? "table_header_cell"
+              : "table_cell",
+          align: table.align,
+          chunks: [],
+        };
+        row.set(table.cellId, cell);
+      }
+
+      cell.chunks = [...cell.chunks, chunk];
+    }
+
+    return [...rows.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([rowIndex, cells]) => ({
+        rowIndex,
+        cells: [...cells.values()].sort(
+          (a, b) => a.columnIndex - b.columnIndex,
+        ),
+      }));
+  }
+
+  function isTableCellBlockType(blockType: string | undefined): boolean {
+    return (
+      blockType === "table_header_cell" || blockType === "table_cell"
+    );
+  }
+
+  // Group chunks into blocks based on block type changes
+  $: parsedBlocks = (() => {
+    const blocks: Chunk[][] = [];
+    let currentBlock: Chunk[] = [];
+    let lastBlockType: string | undefined = undefined;
+    let lastBlockLevel: number | undefined = undefined;
+    let lastTableId: string | undefined = undefined;
+    let lastOffset: number = -1;
+
+    for (const seg of parsedSegments) {
+      if (seg.status === "START_STREAM" || seg.status === "END_STREAM") {
+        continue;
+      }
+
+      const chunk = seg.chunk;
+      const blockType = chunk.block.type;
+      const blockLevel = chunk.block.level;
+      const tableId = chunk.block.table?.tableId;
+
+      // Detect new block: type change, or heading level change
+      // For list items, use gap in offset to detect new item
+      let isNewBlock = false;
+
+      if (
+        blockType !== lastBlockType &&
+        !(
+          isTableCellBlockType(blockType) &&
+          isTableCellBlockType(lastBlockType) &&
+          tableId === lastTableId
+        )
+      ) {
+        isNewBlock = true;
+      } else if (tableId !== lastTableId) {
+        isNewBlock = true;
+      } else if (blockType === "heading" && blockLevel !== lastBlockLevel) {
+        isNewBlock = true;
+      } else if (blockType === "list_item" && lastOffset >= 0) {
+        const previousChunk = currentBlock[currentBlock.length - 1];
+        if (previousChunk?.text.endsWith("\n") && chunk.text.trim().length > 0) {
+          isNewBlock = true;
+        }
+      }
+
+      if (isNewBlock && currentBlock.length > 0) {
+        blocks.push(currentBlock);
+        currentBlock = [];
+      }
+
+      currentBlock.push(chunk);
+      lastBlockType = blockType;
+      lastBlockLevel = blockLevel;
+      lastTableId = tableId;
+      lastOffset = chunk.offset + chunk.length;
+    }
+
+    if (currentBlock.length > 0) {
+      blocks.push(currentBlock);
+    }
+
+    return blocks;
+  })();
+
+  onMount(async () => {
+    try {
+      const tempParser = await MarkdownStreamParser.getInstance("init");
+      MarkdownStreamParser.removeInstance("init");
+      parserInitialized = true;
+    } catch (e) {
+      console.error("Failed to initialize parser:", e);
+      error = "Failed to load parser. Please check WASM file path.";
+    }
+
+    await loadExamples();
+    await loadSelectedFiles();
+  });
+
+  $: if (selectedExample) {
+    loadSelectedFiles();
+  }
+
+  $: {
+    if (jsonContent) {
+      try {
+        const parsed = JSON.parse(jsonContent);
+        if (Array.isArray(parsed)) {
+          jsonItems = parsed;
+        } else {
+          console.error("Parsed jsonContent is not an array:", parsed);
+          jsonItems = [];
+        }
+      } catch (e) {
+        console.error("Failed to parse jsonContent:", e);
+        jsonItems = [];
+      }
+    } else {
+      jsonItems = [];
+    }
+  }
+
+  // Helper function to determine CSS classes for text based on active spans
+  function getSpanClasses(styles: SpanType[]): string {
+    const classes: string[] = [];
+
+    if (styles.includes("bold") && styles.includes("italic")) {
+      classes.push("font-bold", "italic");
+    } else if (styles.includes("bold")) {
+      classes.push("font-bold");
+    } else if (styles.includes("italic")) {
+      classes.push("italic");
+    }
+
+    if (styles.includes("strikethrough")) {
+      classes.push("line-through");
+    }
+
+    return classes.join(" ");
+  }
+
+  // Check if style includes code
+  function hasCodeStyle(styles: SpanType[]): boolean {
+    return styles.includes("code");
+  }
 </script>
 
 <div class="p-6 min-h-screen bg-gray-50">
-    <div class="mb-5">
-        <h1 class="text-2xl font-bold mb-4">@lixpi/markdown-stream-parser <span class="text-gray-500"><i>demo</i></span></h1>
-        <h2 class="mb-5">This is just a <b>quick and dirty showcase</b> of the <i>@lixpi/markdown-stream-parser</i>, the <b class="text-red-600">parser itself has nothing to do with rendering</b> !!! Please keep that in mind...</h2>
-        <h3 class="mb-5">This <b>demo is entirely `vibe-coded`</b>, while <b>the parser is painstakingly created by a human being 👩‍💻 :)</b></h3>
-    </div>
+  <div class="mb-5">
+    <h1 class="text-2xl font-bold mb-4">
+      @lixpi/markdown-stream-parser <span class="text-gray-500"
+        ><i>demo</i></span
+      >
+    </h1>
+    <h2 class="mb-5">
+      This is just a <b>quick and dirty showcase</b> of the
+      <i>@lixpi/markdown-stream-parser</i>, the
+      <b class="text-red-600">parser itself has nothing to do with rendering</b>
+      !!! Please keep that in mind...
+    </h2>
+    <h3 class="mb-5">
+      This <b>parser setup example is just an AI slop</b>, its only goal is to
+      visually showcase the parser.
+      <b
+        >pls refer to the readme file for better instruction on how to user
+        parser API</b
+      >
+    </h3>
+  </div>
   <label class="block text-sm font-medium mb-1">Select LLM Example</label>
   <div class="mb-6 flex flex-col md:flex-row md:items-center gap-4">
     <select
@@ -247,34 +537,53 @@ $: { // Reactive block to parse jsonContent when it changes
     </select>
     <div class="flex items-center gap-2">
       <label class="text-sm">Delay: {delay}ms</label>
-      <input type="range" min="10" max="500" step="10" bind:value={delay} class="w-32" />
+      <input
+        type="range"
+        min="10"
+        max="500"
+        step="10"
+        bind:value={delay}
+        class="w-32"
+      />
     </div>
     <div class="flex flex-wrap gap-2">
-      <button class="bg-blue-600 text-white px-3 py-1 rounded shadow hover:bg-blue-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
-              on:click={simulateStream}
-              disabled={streaming}>
+      <button
+        class="bg-blue-600 text-white px-3 py-1 rounded shadow hover:bg-blue-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
+        on:click={simulateStream}
+        disabled={streaming}
+      >
         Simulate stream
       </button>
       {#if paused}
-        <button class="bg-amber-500 text-white px-3 py-1 rounded shadow hover:bg-amber-600 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
-                on:click={resumeStream}>
+        <button
+          class="bg-amber-500 text-white px-3 py-1 rounded shadow hover:bg-amber-600 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
+          on:click={resumeStream}
+        >
           Resume stream
         </button>
       {:else}
-        <button class="bg-amber-500 text-white px-3 py-1 rounded shadow hover:bg-amber-600 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
-                on:click={pauseStream}
-                disabled={!streaming || paused}>
+        <button
+          class="bg-amber-500 text-white px-3 py-1 rounded shadow hover:bg-amber-600 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
+          on:click={pauseStream}
+          disabled={!streaming || paused}
+        >
           Pause stream
         </button>
       {/if}
-      <button class="bg-green-600 text-white px-3 py-1 rounded shadow hover:bg-green-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
-              on:click={processNextToken}
-              disabled={!paused || currentTokenIndex === null || currentTokenIndex >= tokens.length - 1}>
+      <button
+        class="bg-green-600 text-white px-3 py-1 rounded shadow hover:bg-green-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
+        on:click={processNextToken}
+        disabled={!paused ||
+          currentTokenIndex === null ||
+          currentTokenIndex >= tokens.length - 1}
+      >
         Process next token
       </button>
-      <button class="bg-red-600 text-white px-3 py-1 rounded shadow hover:bg-red-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
-              on:click={resetParser}
-              disabled={!parser && !parsedSegments.length}>
+      <button
+        class="bg-red-600 text-white px-3 py-1 rounded shadow hover:bg-red-700 disabled:bg-gray-400 disabled:hover:bg-gray-400 disabled:opacity-50"
+        on:click={resetParser}
+        disabled={!parser && !parsedSegments.length}
+      >
         Reset parser
       </button>
     </div>
@@ -285,188 +594,235 @@ $: { // Reactive block to parse jsonContent when it changes
 
   <div class="grid grid-cols-1 md:grid-cols-5 gap-6">
     <!-- Parsed stream column -->
-    <div class="md:col-span-2 bg-white rounded shadow p-4 min-h-[400px] flex flex-col">
+    <div
+      class="md:col-span-2 bg-white rounded shadow p-4 min-h-[400px] flex flex-col"
+    >
       <h2 class="font-bold mb-2 text-lg">Parsed Stream</h2>
       <div class="flex-1 overflow-auto space-y-2">
         {#each parsedBlocks as block}
-          <div class="my-1">
-            {#each block as seg}
-              {#if seg.segment?.type === 'header'}
-                {#if seg.segment?.level === 1}
-                  <h1 class="inline text-2xl font-bold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+          {@const blockType = block[0]?.block.type}
+          {@const blockLevel = block[0]?.block.level}
+          {@const blockLanguage = block[0]?.block.language}
+          {@const hasTableCells =
+            blockType === "table_header_cell" || blockType === "table_cell"}
+          {@const tableRows = hasTableCells ? buildTableRows(block) : []}
+
+          <div class="my-1 {hasTableCells ? 'flex flex-wrap gap-0' : ''}">
+            {#if blockType === "heading"}
+              {#if blockLevel === 1}
+                <h1 class="inline text-2xl font-bold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h1>
-                {:else if seg.segment?.level === 2}
-                  <h2 class="inline text-xl font-bold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+                  {/each}
+                </h1>
+              {:else if blockLevel === 2}
+                <h2 class="inline text-xl font-bold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h2>
-                {:else if seg.segment?.level === 3}
-                  <h3 class="inline text-lg font-semibold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+                  {/each}
+                </h2>
+              {:else if blockLevel === 3}
+                <h3 class="inline text-lg font-semibold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h3>
-                {:else if seg.segment?.level === 4}
-                  <h4 class="inline text-base font-semibold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+                  {/each}
+                </h3>
+              {:else if blockLevel === 4}
+                <h4 class="inline text-base font-semibold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h4>
-                {:else if seg.segment?.level === 5}
-                  <h5 class="inline text-sm font-semibold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+                  {/each}
+                </h4>
+              {:else if blockLevel === 5}
+                <h5 class="inline text-sm font-semibold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h5>
-                {:else if seg.segment?.level === 6}
-                  <h6 class="inline text-xs font-semibold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
+                  {/each}
+                </h5>
+              {:else if blockLevel === 6}
+                <h6 class="inline text-xs font-semibold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
                     {:else}
-                      {seg.segment?.segment}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
                     {/if}
-                  </h6>
-                {:else}
-                  <span class="inline font-semibold">
-                    {#if seg.segment?.styles?.length}
-                      <span class={
-                        seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                        seg.segment.styles.includes('bold') ? 'font-bold' :
-                        seg.segment.styles.includes('italic') ? 'italic' :
-                        ''
-                      }>
-                        {#if seg.segment.styles.includes('strikethrough')}
-                          <span class="line-through">{seg.segment?.segment}</span>
-                        {:else if seg.segment.styles.includes('code')}
-                          <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                        {:else}
-                          {seg.segment?.segment}
-                        {/if}
-                      </span>
-                    {:else}
-                      {seg.segment?.segment}
-                    {/if}
-                  </span>
-                {/if}
-              {:else if seg.segment?.type === 'codeBlock'}
-                <pre class="inline bg-gray-100 rounded p-1 font-mono text-sm text-gray-800 overflow-x-auto align-middle"><code>{seg.segment?.segment}</code></pre>
-              {:else if seg.segment?.type === 'blockQuote'}
-                <span class="inline border-l-4 border-blue-400 pl-2 italic text-gray-700">{seg.segment?.segment}</span>
+                  {/each}
+                </h6>
               {:else}
-                <span class="inline text-base leading-relaxed">
-                  {#if seg.segment?.styles?.length}
-                    <span class={
-                      seg.segment.styles.includes('bold') && seg.segment.styles.includes('italic') ? 'font-bold italic' :
-                      seg.segment.styles.includes('bold') ? 'font-bold' :
-                      seg.segment.styles.includes('italic') ? 'italic' :
-                      ''
-                    }>
-                      {#if seg.segment.styles.includes('strikethrough')}
-                        <span class="line-through">{seg.segment?.segment}</span>
-                      {:else if seg.segment.styles.includes('code')}
-                        <code class="bg-gray-200 rounded px-1 text-sm font-mono">{seg.segment?.segment}</code>
-                      {:else}
-                        {seg.segment?.segment}
-                      {/if}
-                    </span>
-                  {:else}
-                    {seg.segment?.segment}
-                  {/if}
+                <span class="inline font-semibold">
+                  {#each block as chunk}
+                    {@const styles = [
+                      ...chunk.contained.map((s) => s.type),
+                      ...chunk.opening.map((s) => s.type),
+                    ]}
+                    {#if hasCodeStyle(styles)}
+                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                        >{chunk.text}</code
+                      >
+                    {:else}
+                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
+                    {/if}
+                  {/each}
                 </span>
               {/if}
-            {/each}
+            {:else if blockType === "code_block"}
+              <pre
+                class="inline bg-gray-100 rounded p-1 font-mono text-sm text-gray-800 overflow-x-auto align-middle"><code
+                  >{#each block as chunk}{chunk.text}{/each}</code
+                ></pre>
+              {#if blockLanguage}
+                <span class="text-xs text-gray-500 ml-2">{blockLanguage}</span>
+              {/if}
+            {:else if blockType === "blockquote"}
+              <span
+                class="inline border-l-4 border-blue-400 pl-2 italic text-gray-700"
+              >
+                {#each block as chunk}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
+                  {#if hasCodeStyle(styles)}
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
+                  {:else}
+                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
+                  {/if}
+                {/each}
+              </span>
+            {:else if blockType === "list_item"}
+              {@const list = block[0]?.block.list}
+              <span class="inline text-base leading-relaxed">
+                <span class="mr-1">
+                  {#if list?.type === "ordered"}
+                    {list.ordinal ?? ""}{list.marker}
+                  {:else}
+                    •
+                  {/if}
+                </span>
+                {#each block as chunk}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
+                  {#if hasCodeStyle(styles)}
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
+                  {:else}
+                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
+                  {/if}
+                {/each}
+              </span>
+            {:else if blockType === "table_header_cell" || blockType === "table_cell"}
+              <div class="inline-block max-w-full overflow-x-auto">
+                <table class="border-collapse border border-gray-300 bg-white text-sm">
+                {#each tableRows as row}
+                  <tr>
+                    {#each row.cells as cell}
+                      <svelte:element
+                        this={cell.type === "table_header_cell" ? "th" : "td"}
+                        class={`min-w-24 border border-gray-300 px-2 py-1 text-sm ${getTableCellAlignClass(
+                          cell,
+                        )} ${cell.type === "table_header_cell"
+                          ? "bg-gray-100 font-semibold"
+                          : "bg-white"}`}
+                      >
+                        {#each cell.chunks as chunk}
+                          {@const styles = [
+                            ...chunk.contained.map((s) => s.type),
+                            ...chunk.opening.map((s) => s.type),
+                          ]}
+                          {#if hasCodeStyle(styles)}
+                            <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                              >{chunk.text}</code
+                            >
+                          {:else}
+                            <span class={getSpanClasses(styles)}>{chunk.text}</span>
+                          {/if}
+                        {/each}
+                      </svelte:element>
+                    {/each}
+                  </tr>
+                {/each}
+                </table>
+              </div>
+            {:else}
+              <!-- Default paragraph rendering -->
+              <span class="inline text-base leading-relaxed">
+                {#each block as chunk}
+                  {@const styles = [
+                    ...chunk.contained.map((s) => s.type),
+                    ...chunk.opening.map((s) => s.type),
+                  ]}
+                  {#if hasCodeStyle(styles)}
+                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
+                      >{chunk.text}</code
+                    >
+                  {:else}
+                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
+                  {/if}
+                {/each}
+              </span>
+            {/if}
           </div>
         {/each}
       </div>
@@ -476,19 +832,33 @@ $: { // Reactive block to parse jsonContent when it changes
     <div class="flex flex-col gap-4 sticky top-6 self-start">
       <div class="bg-white rounded shadow p-4 min-h-[180px]">
         <h2 class="font-bold mb-2 text-lg">Current Token</h2>
-        <pre class="font-mono text-blue-700 text-lg break-all whitespace-pre-wrap">{JSON.stringify(currentToken, null, 2)}</pre>
+        <pre
+          class="font-mono text-blue-700 text-lg break-all whitespace-pre-wrap">{JSON.stringify(
+            currentToken,
+            null,
+            2,
+          )}</pre>
       </div>
       <div class="bg-white rounded shadow p-4 min-h-[180px] overflow-auto">
         <h2 class="font-bold mb-2 text-lg">Parsed Chunks</h2>
         {#if currentParsedChunks.length > 0}
           {#each currentParsedChunks as chunk, index}
             <div class="mb-2">
-              <div class="text-xs font-semibold text-gray-500 mb-1">{index + 1} of {currentParsedChunks.length}</div>
-              <pre class="font-mono text-gray-800 text-sm whitespace-pre-wrap">{JSON.stringify(chunk, null, 2)}</pre>
+              <div class="text-xs font-semibold text-gray-500 mb-1">
+                {index + 1} of {currentParsedChunks.length}
+              </div>
+              <pre
+                class="font-mono text-gray-800 text-sm whitespace-pre-wrap">{JSON.stringify(
+                  chunk,
+                  null,
+                  2,
+                )}</pre>
             </div>
           {/each}
         {:else}
-          <div class="text-gray-500 italic">No parsed chunks for this token</div>
+          <div class="text-gray-500 italic">
+            No parsed chunks for this token
+          </div>
         {/if}
       </div>
     </div>
@@ -496,11 +866,16 @@ $: { // Reactive block to parse jsonContent when it changes
     <!-- Raw JSON column -->
     <div class="bg-white rounded shadow p-4 min-h-[400px] flex flex-col">
       <h2 class="font-bold mb-2 text-lg">Raw array of streamed tokens</h2>
-      <div class="flex-1 overflow-auto font-mono text-sm text-gray-700 space-y-1">
+      <div
+        class="flex-1 overflow-auto font-mono text-sm text-gray-700 space-y-1"
+      >
         {#each jsonItems as item, index}
           <!-- Apply conditional background -->
           <div
-            class="whitespace-pre-wrap break-all p-1 rounded transition-colors duration-150 {index === currentTokenIndex ? 'bg-blue-200' : 'bg-gray-100 hover:bg-blue-100'}"
+            class="whitespace-pre-wrap break-all p-1 rounded transition-colors duration-150 {index ===
+            currentTokenIndex
+              ? 'bg-blue-200'
+              : 'bg-gray-100 hover:bg-blue-100'}"
           >
             {JSON.stringify(item)}
           </div>
@@ -511,7 +886,8 @@ $: { // Reactive block to parse jsonContent when it changes
     <!-- Full txt column -->
     <div class="bg-white rounded shadow p-4 min-h-[400px] flex flex-col">
       <h2 class="font-bold mb-2 text-lg">Concatenated raw LLM output</h2>
-      <pre class="flex-1 overflow-auto whitespace-pre-wrap text-gray-700">{txtContent}</pre>
+      <pre
+        class="flex-1 overflow-auto whitespace-pre-wrap text-gray-700">{txtContent}</pre>
     </div>
   </div>
 </div>

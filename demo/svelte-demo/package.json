@@ -14,7 +14,8 @@
 		"generate-manifest": "ts-node scripts/generate-llm-examples-manifest.ts",
 		"copy-llm-examples": "ts-node scripts/copy-llm-examples.ts",
 		"predev": "pnpm copy-llm-examples && pnpm generate-manifest",
-		"prebuild": "pnpm copy-llm-examples && pnpm generate-manifest"
+		"prebuild": "pnpm copy-llm-examples && pnpm generate-manifest",
+		"postinstall": "cp node_modules/web-tree-sitter/tree-sitter.wasm static/ && cp src/assets/parsers/tree-sitter-markdown.wasm static/"
 	},
 	"files": [
 		"dist",
@@ -52,7 +53,8 @@
 		"tailwindcss": "^4.0.0",
 		"ts-node": "^10.9.2",
 		"typescript": "^5.0.0",
-		"vite": "^6.2.6"
+		"vite": "^6.2.6",
+		"web-tree-sitter": "*"
 	},
 	"keywords": [
 		"svelte"

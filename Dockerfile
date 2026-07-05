@@ -5,10 +5,22 @@ ARG NODE_VERSION=23
 FROM node:${NODE_VERSION}-alpine
 
 # Install necessary packages
-RUN apk add --update --no-cache curl
+# tree-sitter needs C/C++ compiler (g++, make) and python3
+# cargo is needed to install tree-sitter-cli from source because npm install fails due to network/SSL issues with GitHub releases in this environment
+RUN apk add --update --no-cache curl python3 make g++ cargo
 
-# Install pnpm globally
-RUN npm install -g pnpm
+# Match the packageManager version declared in package.json. Newer pnpm versions
+# no longer read the demo's pnpm.onlyBuiltDependencies setting.
+RUN npm install -g pnpm@9.15.0
+
+# Install tree-sitter-cli from source via cargo (bypassing GitHub releases download issue)
+# Pin version to 0.25.0 to avoid dependency on libloading 0.9.0 which requires newer Rust than available in node:23-alpine
+RUN cargo install --locked --version 0.25.0 tree-sitter-cli
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set environment variables for C++ compilation
+ENV CXXFLAGS="-std=c++20 -fexceptions"
+ENV CXX="g++ -std=c++20 -fexceptions"
 
 # Set the working directory
 WORKDIR /usr/src/service
