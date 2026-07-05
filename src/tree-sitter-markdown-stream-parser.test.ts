@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { MarkdownStreamParser } from './tree-sitter-markdown-stream-parser'
 import type { Chunk, ClosedSpan, SpanType, StreamingChunk } from './tree-sitter/types.ts'
+import { getListMetadata } from './tree-sitter/list-support.ts'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import fs from 'fs'
@@ -267,6 +268,237 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
 
       const listChunks = parsedChunks.filter(c => c.block.type === 'list_item')
       expect(listChunks.length).toBeGreaterThan(0)
+    })
+
+    it('should expose unordered list metadata for each marker type', async () => {
+      parser.parseToken('- Dash\n')
+      parser.parseToken('+ Plus\n')
+      parser.parseToken('* Star\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const items = activeChunks.filter(c => c.block.type === 'list_item' && c.text.trim().length > 0)
+
+      expect(items.map(c => c.block.list?.marker)).toEqual(['-', '+', '*'])
+      expect(items.every(c => c.block.list?.type === 'unordered')).toBe(true)
+      expect(items.every(c => c.block.list?.depth === 0)).toBe(true)
+      expect(items.every(c => c.block.list?.ordinal === undefined)).toBe(true)
+    })
+
+    it('should expose ordered list metadata with delimiters and ordinals', async () => {
+      parser.parseToken('1. First\n')
+      parser.parseToken('10. Tenth\n')
+      parser.parseToken('1) Parenthesis\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const items = activeChunks.filter(c => c.block.type === 'list_item' && c.text.trim().length > 0)
+
+      expect(items.map(c => c.block.list?.marker)).toEqual(['.', '.', ')'])
+      expect(items.map(c => c.block.list?.ordinal)).toEqual([1, 10, 1])
+      expect(items.every(c => c.block.list?.type === 'ordered')).toBe(true)
+    })
+
+    it('should omit unsafe ordered ordinals from metadata', async () => {
+      const marker: any = {
+        type: 'list_marker_dot',
+        text: '9007199254740993.',
+        children: [],
+        parent: undefined,
+      }
+      const listItem: any = {
+        type: 'list_item',
+        children: [marker],
+        parent: undefined,
+      }
+      const list: any = {
+        type: 'list',
+        children: [listItem],
+        parent: null,
+      }
+      marker.parent = listItem
+      listItem.parent = list
+
+      const metadata = getListMetadata(listItem)
+
+      expect(metadata?.type).toBe('ordered')
+      expect(metadata?.marker).toBe('.')
+      expect(metadata?.ordinal).toBeUndefined()
+    })
+
+    it('should expose nested list depth without structural indentation', async () => {
+      parser.parseToken('- Parent\n')
+      parser.parseToken('  - Child\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const parent = activeChunks.find(c => c.text.includes('Parent'))
+      const child = activeChunks.find(c => c.text.includes('Child'))
+
+      expect(fullText).toBe('Parent\nChild\n')
+      expect(parent?.block.list?.depth).toBe(0)
+      expect(child?.block.list?.depth).toBe(1)
+    })
+
+    it('should strip task markers and expose checked state', async () => {
+      parser.parseToken('- [x] Done\n')
+      parser.parseToken('- [X] Upper\n')
+      parser.parseToken('- [ ] Todo\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const items = activeChunks.filter(c => c.block.type === 'list_item' && c.text.trim().length > 0)
+
+      expect(fullText).toBe('Done\nUpper\nTodo\n')
+      expect(fullText).not.toContain('[x]')
+      expect(fullText).not.toContain('[X]')
+      expect(fullText).not.toContain('[ ]')
+      expect(items.map(c => c.block.list?.task?.checked)).toEqual([true, true, false])
+    })
+
+    it('should handle split list and task markers after backtracking', async () => {
+      parser.parseToken('-')
+      parser.parseToken(' ')
+      parser.parseToken('[ ] ')
+      parser.parseToken('Item\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const item = activeChunks.find(c => c.text.includes('Item'))
+
+      expect(fullText).toBe('Item\n')
+      expect(item?.block.type).toBe('list_item')
+      expect(item?.block.list).toMatchObject({
+        type: 'unordered',
+        marker: '-',
+        depth: 0,
+        task: { checked: false },
+      })
+    })
+
+    it('should keep inline span offsets correct inside task items', async () => {
+      parser.parseToken('- [x] Run `npm install` now\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const codeSpan = getClosedSpans(activeChunks).find(s => s.type === 'code')
+
+      expect(fullText).toBe('Run npm install now\n')
+      expect(codeSpan?.offset).toBe('Run '.length)
+      expect(codeSpan?.length).toBe('npm install'.length)
+    })
+
+    it('should preserve list metadata and strip continuation prefixes in list-contained code blocks', async () => {
+      parser.parseToken('- Example\n')
+      parser.parseToken('  ```ts\n')
+      parser.parseToken('  const x = 1\n')
+      parser.parseToken('  ```\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const codeChunks = activeChunks.filter(c => c.block.type === 'code_block')
+      const codeText = codeChunks.map(c => c.text).join('')
+
+      expect(codeText).toBe('const x = 1\n')
+      expect(codeText).not.toContain('  ')
+      expect(codeChunks.length).toBeGreaterThan(0)
+      expect(codeChunks.every(c => c.block.list?.depth === 0)).toBe(true)
+      expect(codeChunks.every(c => c.block.list?.marker === '-')).toBe(true)
+    })
+
+    it('should handle a loose list with a blank line between items', async () => {
+      parser.parseToken('- one\n')
+      parser.parseToken('\n')
+      parser.parseToken('- two\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const items = activeChunks.filter(c => c.block.type === 'list_item' && c.text.trim().length > 0)
+
+      expect(fullText).toBe('one\n\ntwo\n')
+      expect(items.every(c => c.block.list?.depth === 0)).toBe(true)
+      expect(items.every(c => c.block.list?.marker === '-')).toBe(true)
+    })
+
+    it('should split a plain unordered marker across chunks', async () => {
+      parser.parseToken('-')
+      parser.parseToken(' ')
+      parser.parseToken('Item\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const item = activeChunks.find(c => c.text.includes('Item'))
+
+      expect(fullText).toBe('Item\n')
+      expect(item?.block.list).toMatchObject({ type: 'unordered', marker: '-', depth: 0 })
+      expect(item?.block.list?.task).toBeUndefined()
+    })
+
+    it('should split a plain ordered marker across chunks', async () => {
+      parser.parseToken('1')
+      parser.parseToken('.')
+      parser.parseToken(' ')
+      parser.parseToken('Item\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+      const item = activeChunks.find(c => c.text.includes('Item'))
+
+      expect(fullText).toBe('Item\n')
+      expect(item?.block.list).toMatchObject({ type: 'ordered', marker: '.', ordinal: 1, depth: 0 })
+    })
+
+    it('should not treat non-checkbox bracket text as a task marker', async () => {
+      parser.parseToken('- Some ')
+      parser.parseToken('[ ')
+      parser.parseToken('note] ')
+      parser.parseToken('text\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+
+      expect(fullText).toBe('Some [ note] text\n')
+      expect(activeChunks.every(c => c.block.list?.task === undefined)).toBe(true)
+    })
+
+    it('should not suppress a non-list blockquote continuation (negative test)', async () => {
+      parser.parseToken('> line one\n')
+      parser.parseToken('> line two\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+
+      // Blockquote marker stripping is a separate, unimplemented feature (see
+      // the skipped tests in the "Blockquotes" describe block above). This
+      // asserts the new list-scoped block_continuation suppression does not
+      // reach into a plain (non-list) blockquote and swallow its text.
+      expect(fullText).toContain('line one')
+      expect(fullText).toContain('line two')
+    })
+
+    it('should suppress a list-scoped continuation nested inside a blockquote', async () => {
+      parser.parseToken('> - a\n')
+      parser.parseToken('>   - b\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const fullText = activeChunks.map(c => c.text).join('')
+
+      // The continuation line carries the blockquote's "> " prefix, but
+      // because it also structurally continues the list item, it must be
+      // suppressed the same as an unquoted nested list continuation.
+      expect(fullText).not.toContain('>   ')
+      expect(fullText).toContain('a')
+      expect(fullText).toContain('b')
     })
   })
 

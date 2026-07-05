@@ -1,4 +1,5 @@
 import type { Node, Tree } from 'web-tree-sitter'
+import { stripListSuppressedRanges } from './list-support.ts'
 
 // Extract header content from a chunk, excluding marker nodes (# symbols).
 // Requires tree-sitter node for accurate extraction.
@@ -66,7 +67,8 @@ export function getCodeBlockContent(
                 if (overlapStart < overlapEnd) {
                     const relativeStart = overlapStart - startByte
                     const relativeEnd = overlapEnd - startByte
-                    extractedText += content.substring(relativeStart, relativeEnd)
+                    const text = content.substring(relativeStart, relativeEnd)
+                    extractedText += stripListSuppressedRanges(text, child, content, overlapStart, overlapEnd)
                 }
             }
         }

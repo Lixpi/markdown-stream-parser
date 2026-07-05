@@ -331,11 +331,8 @@
       } else if (blockType === "heading" && blockLevel !== lastBlockLevel) {
         isNewBlock = true;
       } else if (blockType === "list_item" && lastOffset >= 0) {
-        // New list item if there's a significant gap in offset (indicates newline/new item)
-        // Or if the text starts after a newline marker
-        const gap = chunk.offset - lastOffset;
-        if (gap > 50) {
-          // Heuristic: large gap suggests new list item
+        const previousChunk = currentBlock[currentBlock.length - 1];
+        if (previousChunk?.text.endsWith("\n") && chunk.text.trim().length > 0) {
           isNewBlock = true;
         }
       }
@@ -666,8 +663,15 @@
                 {/each}
               </span>
             {:else if blockType === "list_item"}
+              {@const list = block[0]?.block.list}
               <span class="inline text-base leading-relaxed">
-                <span class="mr-1">•</span>
+                <span class="mr-1">
+                  {#if list?.type === "ordered"}
+                    {list.ordinal ?? ""}{list.marker}
+                  {:else}
+                    •
+                  {/if}
+                </span>
                 {#each block as chunk}
                   {@const styles = [
                     ...chunk.contained.map((s) => s.type),

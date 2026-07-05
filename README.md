@@ -192,10 +192,23 @@ type BlockContext = {
         | 'blockquote'
     level?: number
     language?: string
+    list?: {
+        type: 'ordered' | 'unordered'
+        depth: number
+        marker: '-' | '+' | '*' | '.' | ')'
+        ordinal?: number
+        task?: { checked: boolean }
+    }
 }
 ```
 
 `level` applies to headings. `language` contains the info string detected on a fenced code block.
+
+`list` is present when the chunk is inside a list item, including nested blocks such as fenced code blocks contained by a list item. `depth` is zero-based: top-level items use `0`, and nested items use `1` or greater.
+
+For unordered items, `marker` is the bullet character from the source: `-`, `+`, or `*`. For ordered items, `marker` is the delimiter only: `.` or `)`. The list number is exposed separately as `ordinal` when it is safely representable as a JavaScript number, so `10.` becomes `{ ordinal: 10, marker: '.' }`.
+
+Task list items omit the checkbox marker and following space from rendered text. `[x]` and `[X]` produce `task: { checked: true }`; `[ ]` produces `task: { checked: false }`.
 
 When `includeRawStreamedToken` is enabled, `original` contains the raw Markdown source associated with the emitted chunk. It is separate from the rendered UTF-16 coordinate space.
 
@@ -309,17 +322,27 @@ The parser handles these structures in its exercised parsing paths:
 
 - Paragraphs and ATX headings (`#` through `######`)
 - Fenced code blocks with language detection
-- Ordered and unordered list items
+- Ordered list items with `.` and `)` delimiters
+- Unordered list items with `-`, `+`, and `*` markers
+- Nested and loose list items
+- Task list items with checked and unchecked state
 - Bold, italic, bold-italic, strikethrough, and inline code spans
 - Pipe-table cells and delimiter suppression for covered table forms
 
 Link and image span extraction is implemented, including URL and image metadata, but dedicated coverage is still needed for those paths.
 
+### Lists
+
+List marker syntax is removed from `text`. Consumers should use `block.list` to render bullets, ordered numbers, nesting, and task state instead of parsing the original Markdown source.
+
+List metadata is attached to all chunks emitted inside a list item. A fenced code block inside a list keeps `block.type === 'code_block'` and also receives `block.list`, so consumers can preserve list indentation while rendering the nested block with its natural block type.
+
+The parser removes structural list indentation from rendered output. Rendered list item text keeps meaningful content newlines, including blank lines in loose lists and the trailing newline at the end of an item.
+
 These structures are incomplete or unsupported:
 
 - Blockquote marker stripping and nested blockquotes
 - Full table behavior across all valid table shapes
-- Task lists
 - Horizontal rules
 - Footnotes
 - HTML blocks

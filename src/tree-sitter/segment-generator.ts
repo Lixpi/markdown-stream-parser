@@ -8,6 +8,7 @@ import type {
     SpanType,
     ParserConfig
 } from './types.ts'
+import { HEADER_MARKER_LEVELS, SUPPRESSED_SYNTAX_TYPES } from './types.ts'
 import { findActiveNodeAtPosition, findInlineNodeAtPosition, findBlockNode } from './tree-navigation.ts'
 import { getBlockInfo } from './block-detection.ts'
 import {
@@ -32,22 +33,12 @@ import {
     createLinkSpan,
     createImageSpan
 } from './segment-builder.ts'
-
-// Re-import the constant that we need locally
-const HEADER_MARKER_LEVELS_LOCAL: Record<string, number> = {
-    'atx_h1_marker': 1,
-    'atx_h2_marker': 2,
-    'atx_h3_marker': 3,
-    'atx_h4_marker': 4,
-    'atx_h5_marker': 5,
-    'atx_h6_marker': 6,
-}
-
-const SUPPRESSED_SYNTAX_TYPES_LOCAL = [
-    'list_marker_minus', 'list_marker_plus', 'list_marker_star',
-    'list_marker_dot', 'list_marker_parenthesis',
-    '|'  // Table pipe delimiters
-]
+import {
+    getListSuppressedRanges,
+    isAtListItemContentStart,
+    isListScopedBlockContinuation,
+    stripListSuppressedRanges
+} from './list-support.ts'
 
 export type SegmentGeneratorContext = {
     content: string
@@ -511,8 +502,53 @@ export function generateSegments(
         return { segments: [chunk], state }
     }
 
+    const leadingSuppressedRange = getListSuppressedRanges(
+        currentTree.rootNode,
+        content,
+        actualFromIndex,
+        actualToIndex
+    ).find(range => range.start === actualFromIndex)
+
+    if (leadingSuppressedRange) {
+        const suppressedEnd = leadingSuppressedRange.end
+        state = {
+            ...state,
+            sourceOffset: suppressedEnd,
+        }
+
+        if (suppressedEnd >= actualToIndex) {
+            state = withCheckpoint(state)
+            return { segments, state }
+        }
+
+        return generateSegments(suppressedEnd, actualToIndex, {
+            ...context,
+            state,
+            disableBlockBoundarySplit: true,
+        })
+    }
+
+    if (isListScopedBlockContinuation(nodeAtPosition)) {
+        const continuationEnd = Math.min(nodeAtPosition.endIndex, actualToIndex)
+        state = {
+            ...state,
+            sourceOffset: continuationEnd,
+        }
+
+        if (continuationEnd >= actualToIndex) {
+            state = withCheckpoint(state)
+            return { segments, state }
+        }
+
+        return generateSegments(continuationEnd, actualToIndex, {
+            ...context,
+            state,
+            disableBlockBoundarySplit: true,
+        })
+    }
+
     // Check if the node is a suppressed syntax type
-    if (SUPPRESSED_SYNTAX_TYPES_LOCAL.indexOf(nodeAtPosition.type) !== -1) {
+    if (SUPPRESSED_SYNTAX_TYPES.indexOf(nodeAtPosition.type as typeof SUPPRESSED_SYNTAX_TYPES[number]) !== -1) {
         state = {
             ...state,
             sourceOffset: actualToIndex,
@@ -538,6 +574,13 @@ export function generateSegments(
 
     // Determine the block type and properties
     const blockInfo = getBlockInfo(nodeAtPosition)
+
+    if (blockInfo.list && isAtListItemContentStart(nodeAtPosition, actualFromIndex) && /^\[[ xX]?$/.test(newContent)) {
+        state.pendingInlineContent = newContent
+        state.pendingInlineStartIndex = actualFromIndex
+        state.sourceOffset = actualToIndex
+        return { segments, state }
+    }
 
     // Process content based on block type
     let processedContent = newContent
@@ -579,7 +622,7 @@ export function generateSegments(
         }
     } else if (blockInfo.type === 'paragraph') {
         // Handle incomplete header markers
-        if (nodeAtPosition.type in HEADER_MARKER_LEVELS_LOCAL) {
+        if (nodeAtPosition.type in HEADER_MARKER_LEVELS) {
             state = {
                 ...state,
                 sourceOffset: actualToIndex,
@@ -595,9 +638,11 @@ export function generateSegments(
     let closing: ClosedSpan[] = []
     let contained: ClosedSpan[] = []
     let strippedContent = processedContent
+    let usedInlineContent = false
 
     if (blockInfo.type !== 'codeBlock' && inlineParser) {
         const hostInlineNode = findInlineNodeAtPosition(currentTree.rootNode, actualFromIndex)
+        usedInlineContent = hostInlineNode !== null
         const inlineContent = hostInlineNode?.text ?? processedContent
         const inlineTree = inlineParser.parse(inlineContent)
         const delimiterRanges = collectInlineDelimiterRanges(inlineTree)
@@ -631,8 +676,20 @@ export function generateSegments(
         )
 
         if (hostInlineNode && blockInfo.type !== 'header' && actualToIndex > hostInlineNode.endIndex) {
-            strippedContent += content.substring(Math.max(actualFromIndex, hostInlineNode.endIndex), actualToIndex)
+            const tailStart = Math.max(actualFromIndex, hostInlineNode.endIndex)
+            const tailText = content.substring(tailStart, actualToIndex)
+            strippedContent += stripListSuppressedRanges(tailText, currentTree.rootNode, content, tailStart, actualToIndex)
         }
+    }
+
+    if (blockInfo.type !== 'codeBlock' && !usedInlineContent) {
+        strippedContent = stripListSuppressedRanges(
+            strippedContent,
+            currentTree.rootNode,
+            content,
+            actualFromIndex,
+            actualToIndex
+        )
     }
 
     // Create the chunk with the new API
