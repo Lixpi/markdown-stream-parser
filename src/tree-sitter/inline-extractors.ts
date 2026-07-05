@@ -1,7 +1,7 @@
-import type { Parser } from 'web-tree-sitter'
-import type { StreamingChunk, BlockInfo, InlineStyleConfig, SpanType, ClosedSpan } from './types.js'
-import { findInlineNodeAtPosition } from './tree-navigation.js'
-import { createChunkFromBlockInfo, createClosedSpan, byteOffsetToUtf16 } from './segment-builder.js'
+import type { Parser, Tree, Node } from 'web-tree-sitter'
+import type { StreamingChunk, BlockInfo, InlineStyleConfig, SpanType, ClosedSpan } from './types.ts'
+import { findInlineNodeAtPosition } from './tree-navigation.ts'
+import { createChunkFromBlockInfo, createClosedSpan, byteOffsetToUtf16 } from './segment-builder.ts'
 
 // NOTE: These legacy extractors are kept for backward compatibility but are
 // no longer used by the main segment generator. The new API uses processInlineSpans()
@@ -17,7 +17,7 @@ function extractInlineStyleSegments(
     startByte: number,
     endByte: number,
     blockInfo: BlockInfo,
-    currentTree: Parser.Tree,
+    currentTree: Tree,
     inlineParser: Parser,
     currentUtf16Offset: number = 0,
     useDescendants: boolean = false
@@ -45,12 +45,12 @@ function extractInlineStyleSegments(
         // Check overlap
         if (styleNode.startIndex < relativeEnd && styleNode.endIndex > relativeStart) {
             // Get delimiters - either children or descendants based on config
-            let delimiters: Parser.SyntaxNode[]
+            let delimiters: Node[]
             if (useDescendants) {
                 delimiters = styleNode.descendantsOfType(config.delimiterType)
-                    .sort((a: Parser.SyntaxNode, b: Parser.SyntaxNode) => a.startIndex - b.startIndex)
+                    .sort((a: Node, b: Node) => a.startIndex - b.startIndex)
             } else {
-                delimiters = styleNode.children.filter((c: Parser.SyntaxNode) => c.type === config.delimiterType)
+                delimiters = styleNode.children.filter((c: Node) => c.type === config.delimiterType)
             }
 
             if (delimiters.length >= config.minDelimiters) {
@@ -126,11 +126,11 @@ function extractInlineStyleSegments(
 // DEPRECATED: Use processInlineSpans() in segment-generator.ts instead.
 export function getInlineCodeSegments(
     content: string,
-    node: Parser.SyntaxNode,
+    node: Node,
     startByte: number,
     endByte: number,
     blockInfo: BlockInfo,
-    currentTree: Parser.Tree,
+    currentTree: Tree,
     inlineParser: Parser,
     currentUtf16Offset: number = 0
 ): StreamingChunk[] {
@@ -151,11 +151,11 @@ export function getInlineCodeSegments(
 // DEPRECATED: Use processInlineSpans() in segment-generator.ts instead.
 export function getBoldSegments(
     content: string,
-    node: Parser.SyntaxNode,
+    node: Node,
     startByte: number,
     endByte: number,
     blockInfo: BlockInfo,
-    currentTree: Parser.Tree,
+    currentTree: Tree,
     inlineParser: Parser,
     currentUtf16Offset: number = 0
 ): StreamingChunk[] {
@@ -176,11 +176,11 @@ export function getBoldSegments(
 // DEPRECATED: Use processInlineSpans() in segment-generator.ts instead.
 export function getItalicSegments(
     content: string,
-    node: Parser.SyntaxNode,
+    node: Node,
     startByte: number,
     endByte: number,
     blockInfo: BlockInfo,
-    currentTree: Parser.Tree,
+    currentTree: Tree,
     inlineParser: Parser,
     currentUtf16Offset: number = 0
 ): StreamingChunk[] {
@@ -201,11 +201,11 @@ export function getItalicSegments(
 // DEPRECATED: Use processInlineSpans() in segment-generator.ts instead.
 export function getStrikethroughSegments(
     content: string,
-    node: Parser.SyntaxNode,
+    node: Node,
     startByte: number,
     endByte: number,
     blockInfo: BlockInfo,
-    currentTree: Parser.Tree,
+    currentTree: Tree,
     inlineParser: Parser,
     currentUtf16Offset: number = 0
 ): StreamingChunk[] {

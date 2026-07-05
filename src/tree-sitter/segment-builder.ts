@@ -6,8 +6,9 @@ import type {
     BlockType,
     OpenSpan,
     ClosedSpan,
+    RecoveryInfo,
     ParserConfig
-} from './types.js'
+} from './types.ts'
 
 // ============================================================================
 // UTF-16 OFFSET UTILITIES
@@ -53,7 +54,7 @@ export function utf16ToByteOffset(text: string, utf16Offset: number): number {
 // ============================================================================
 
 // Map internal block type strings to BlockType enum.
-function mapBlockType(type: string): BlockType {
+export function mapBlockType(type: string): BlockType {
     switch (type) {
         case 'header':
         case 'atx_heading':
@@ -69,6 +70,8 @@ function mapBlockType(type: string): BlockType {
         case 'pipe_table_row':
             return 'table_row'
         case 'pipe_table_cell':
+        case 'table_header_cell':
+        case 'table_cell':
             return 'table_cell'
         case 'blockquote':
             return 'blockquote'
@@ -108,6 +111,7 @@ export function createChunk(
         closing?: ClosedSpan[]
         contained?: ClosedSpan[]
         backtrackOffset?: number
+        recovery?: RecoveryInfo
         original?: string
     }
 ): Chunk {
@@ -120,6 +124,7 @@ export function createChunk(
         closing: options?.closing ?? [],
         contained: options?.contained ?? [],
         backtrackOffset: options?.backtrackOffset,
+        recovery: options?.recovery,
         original: options?.original,
     }
 }
@@ -142,6 +147,7 @@ export function createChunkFromBlockInfo(
         closing?: ClosedSpan[]
         contained?: ClosedSpan[]
         backtrackOffset?: number
+        recovery?: RecoveryInfo
         original?: string
     }
 ): StreamingChunk {

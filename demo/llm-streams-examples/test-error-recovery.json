@@ -1,0 +1,12 @@
+[
+    "## Table Test\n\n",
+    "| Col A | Col B |\n",
+    "| --- | --- |\n",
+    "| cell1 | cell2 |\n\n",
+    "## Code Fence Test\n\n",
+    "Some paragraph text here.\n",
+    "```python\n",
+    "x = 1\n",
+    "```\n\n",
+    "After code.\n"
+]

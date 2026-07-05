@@ -9,8 +9,9 @@ FROM node:${NODE_VERSION}-alpine
 # cargo is needed to install tree-sitter-cli from source because npm install fails due to network/SSL issues with GitHub releases in this environment
 RUN apk add --update --no-cache curl python3 make g++ cargo
 
-# Install pnpm globally
-RUN npm install -g pnpm
+# Match the packageManager version declared in package.json. Newer pnpm versions
+# no longer read the demo's pnpm.onlyBuiltDependencies setting.
+RUN npm install -g pnpm@9.15.0
 
 # Install tree-sitter-cli from source via cargo (bypassing GitHub releases download issue)
 # Pin version to 0.25.0 to avoid dependency on libloading 0.9.0 which requires newer Rust than available in node:23-alpine

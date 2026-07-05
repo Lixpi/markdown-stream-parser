@@ -1,4 +1,4 @@
-import type { Parser } from 'web-tree-sitter'
+import type { Parser, Tree, Node } from 'web-tree-sitter'
 
 // ============================================================================
 // SPAN TYPES - Typed spans with metadata
@@ -91,9 +91,19 @@ export type Chunk = {
     // offset onwards and replace with this chunk + subsequent chunks.
     backtrackOffset?: number
 
+    // Present when a configured recovery window prevented complete replay.
+    recovery?: RecoveryInfo
+
     // Original markdown source (only if includeRawStreamedToken config is true).
     // Useful as fallback when parser messes up or for unsupported formats.
     original?: string
+}
+
+export type RecoveryInfo = {
+    type: 'window_overflow'
+    windowSize: number
+    fullBacktrackOffset: number
+    appliedBacktrackOffset: number
 }
 
 // Stream status wrapper for chunks.
@@ -170,13 +180,13 @@ export type BlockInfo = {
 // Context passed to inline style extractors
 export type InlineExtractionContext = {
     content: string
-    node: Parser.SyntaxNode
+    node: Node
     startByte: number
     endByte: number
     baseSpans: OpenSpan[]
     blockInfo: BlockInfo
     inlineParser: Parser
-    currentTree: Parser.Tree
+    currentTree: Tree
 }
 
 // Configuration for a specific inline style type
@@ -233,11 +243,17 @@ export const INLINE_STYLE_CONFIGS: Record<string, InlineStyleConfig> = {
 
 // State maintained by the segment generator across chunks
 export type SegmentGeneratorState = {
-    // Total UTF-16 code units emitted so far (from stream start)
+    // Total rendered UTF-16 code units emitted so far.
     totalUtf16Offset: number
 
-    // Last emitted UTF-16 offset (for backtrack detection)
+    // Last rendered UTF-16 offset emitted to consumers.
     lastEmittedOffset: number
+
+    // Raw markdown source UTF-16 offset processed so far.
+    sourceOffset: number
+
+    // Last raw markdown source UTF-16 offset that produced public output.
+    lastEmittedSourceOffset: number
 
     // Currently open spans that haven't closed yet
     openSpans: OpenSpan[]
@@ -251,6 +267,17 @@ export type SegmentGeneratorState = {
     // Start index for pending inline content
     pendingInlineStartIndex?: number
 
-    // Accumulated content for backtrack reference
-    accumulatedContent: string
+    // Stable replay points used to translate source recovery ranges to rendered offsets.
+    checkpoints: SegmentGeneratorCheckpoint[]
+}
+
+export type SegmentGeneratorCheckpoint = {
+    sourceOffset: number
+    renderedOffset: number
+    lastEmittedSourceOffset: number
+    lastEmittedOffset: number
+    openSpans: OpenSpan[]
+    currentBlock: BlockState | null
+    pendingInlineContent: string
+    pendingInlineStartIndex?: number
 }

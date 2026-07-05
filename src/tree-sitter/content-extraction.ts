@@ -1,10 +1,10 @@
-import type { Parser } from 'web-tree-sitter'
+import type { Node, Tree } from 'web-tree-sitter'
 
 // Extract header content from a chunk, excluding marker nodes (# symbols).
 // Requires tree-sitter node for accurate extraction.
 export function getHeaderContent(
     content: string,
-    node: Parser.SyntaxNode | undefined,
+    node: Node | undefined,
     startByte: number | undefined,
     endByte: number | undefined
 ): string {
@@ -44,7 +44,7 @@ export function getHeaderContent(
 // Requires tree-sitter node for accurate extraction.
 export function getCodeBlockContent(
     content: string,
-    node: Parser.SyntaxNode | undefined,
+    node: Node | undefined,
     startByte: number | undefined,
     endByte: number | undefined
 ): string {
@@ -81,7 +81,7 @@ export function getCodeBlockContent(
 // Uses the inline parser tree to identify and skip delimiter nodes.
 export function getInlineContent(
     content: string,
-    inlineTree: Parser.Tree,
+    inlineTree: Tree,
     startOffset: number,
     endOffset: number
 ): string {

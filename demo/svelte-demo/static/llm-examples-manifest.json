@@ -75,6 +75,11 @@
     "txt": "/llm-streams-examples/gpt-4.o-immortal people.txt"
   },
   {
+    "base": "test-error-recovery",
+    "json": "/llm-streams-examples/test-error-recovery.json",
+    "txt": "/llm-streams-examples/test-error-recovery.txt"
+  },
+  {
     "base": "test-strikethrough",
     "json": "/llm-streams-examples/test-strikethrough.json",
     "txt": "/llm-streams-examples/test-strikethrough.txt"

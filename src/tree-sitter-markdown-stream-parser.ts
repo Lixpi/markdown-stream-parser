@@ -1,7 +1,21 @@
-import { Parser, Language } from 'web-tree-sitter'
-import TokensStreamBuffer from './tokens-stream-buffer.js'
-import type { StreamingChunk, BlockState, ParserConfig, SegmentGeneratorState, Chunk } from './tree-sitter/types.js'
-import { generateSegments, createInitialState } from './tree-sitter/segment-generator.js'
+import { Parser, Language, type Tree, type Node } from 'web-tree-sitter'
+import TokensStreamBuffer from './tokens-stream-buffer.ts'
+import type {
+    Chunk,
+    RecoveryInfo,
+    StreamingChunk,
+    ParserConfig,
+    SegmentGeneratorCheckpoint,
+    SegmentGeneratorState
+} from './tree-sitter/types.ts'
+import { generateSegments, createInitialState, stateFromCheckpoint } from './tree-sitter/segment-generator.ts'
+import { mapBlockType } from './tree-sitter/segment-builder.ts'
+
+type RecoverySelection = {
+    requiredCheckpoint: SegmentGeneratorCheckpoint
+    appliedCheckpoint: SegmentGeneratorCheckpoint
+    recovery?: RecoveryInfo
+}
 
 // Re-export types for external consumers
 export type {
@@ -12,9 +26,10 @@ export type {
     BlockType,
     BlockContext,
     Chunk,
+    RecoveryInfo,
     StreamingChunk,
     ParserConfig
-} from './tree-sitter/types.js'
+} from './tree-sitter/types.ts'
 
 // Tree-sitter based streaming markdown parser.
 //
@@ -30,16 +45,15 @@ export class MarkdownStreamParser {
     private static instances = new Map<string, MarkdownStreamParser>()
     private static parserInitialized = false
     private static parserInitPromise: Promise<void> | null = null
-    private static markdownLanguage: Parser.Language | null = null
-    private static markdownInlineLanguage: Parser.Language | null = null
+    private static markdownLanguage: Language | null = null
+    private static markdownInlineLanguage: Language | null = null
     private static wasmPath: string | null = null
     private static wasmInlinePath: string | null = null
 
     // Parser instances
     private parser: Parser | null = null
     private inlineParser: Parser | null = null
-    private currentTree: Parser.Tree | null = null
-    private previousTree: Parser.Tree | null = null
+    private currentTree: Tree | null = null
 
     // Configuration
     private config: ParserConfig = {}
@@ -47,6 +61,7 @@ export class MarkdownStreamParser {
     // Content state
     private content: string = ''
     private lastProcessedIndex: number = 0
+    private endPosition: { row: number; column: number } = { row: 0, column: 0 }
     private allSegments: StreamingChunk[] = []
 
     // Segment generator state
@@ -73,6 +88,8 @@ export class MarkdownStreamParser {
     // instanceId - Unique identifier for the parser instance
     // config - Optional parser configuration
     static async getInstance(instanceId: string, config?: ParserConfig): Promise<MarkdownStreamParser> {
+        MarkdownStreamParser.validateConfig(config)
+
         // Initialize parser and language once for all instances
         if (!MarkdownStreamParser.parserInitialized) {
             if (!MarkdownStreamParser.parserInitPromise) {
@@ -84,7 +101,7 @@ export class MarkdownStreamParser {
         if (!MarkdownStreamParser.instances.has(instanceId)) {
             const instance = new MarkdownStreamParser()
             if (config) {
-                instance.config = config
+                instance.config = { ...config }
             }
             await instance.initialize()
             MarkdownStreamParser.instances.set(instanceId, instance)
@@ -169,6 +186,16 @@ export class MarkdownStreamParser {
         }
     }
 
+    private static validateConfig(config?: ParserConfig): void {
+        if (config?.windowSize === undefined) {
+            return
+        }
+
+        if (!Number.isFinite(config.windowSize) || config.windowSize < 0) {
+            throw new RangeError('windowSize must be a finite number greater than or equal to 0')
+        }
+    }
+
     constructor() {
         this.tokensStreamProcessor = new TokensStreamBuffer()
     }
@@ -192,7 +219,9 @@ export class MarkdownStreamParser {
     // Update parser configuration.
     // config - New parser configuration
     setConfig(config: ParserConfig): void {
-        this.config = { ...this.config, ...config }
+        const nextConfig = { ...this.config, ...config }
+        MarkdownStreamParser.validateConfig(nextConfig)
+        this.config = nextConfig
     }
 
     // Get current parser configuration.
@@ -263,6 +292,38 @@ export class MarkdownStreamParser {
 
         this.tokensStreamProcessor.flushBuffer()
 
+        if (this.generatorState.pendingInlineContent) {
+            const text = this.generatorState.pendingInlineContent
+            const currentBlock = this.generatorState.currentBlock
+            const chunk: Chunk = {
+                text,
+                offset: this.generatorState.totalUtf16Offset,
+                length: text.length,
+                block: {
+                    type: currentBlock ? mapBlockType(currentBlock.type) : 'paragraph',
+                    level: currentBlock?.level,
+                    language: currentBlock?.language,
+                },
+                opening: [],
+                closing: [],
+                contained: [],
+                original: this.config.includeRawStreamedToken ? text : undefined,
+            }
+
+            this.generatorState = {
+                ...this.generatorState,
+                totalUtf16Offset: this.generatorState.totalUtf16Offset + text.length,
+                lastEmittedOffset: this.generatorState.totalUtf16Offset + text.length,
+                lastEmittedSourceOffset: this.generatorState.sourceOffset,
+                pendingInlineContent: '',
+                pendingInlineStartIndex: undefined,
+            }
+
+            const streamingChunk: StreamingChunk = { status: 'STREAMING', chunk }
+            this.allSegments.push(streamingChunk)
+            this.notifyTokenParse(streamingChunk)
+        }
+
         if (this.unsubscribeFromProcessor) {
             this.unsubscribeFromProcessor()
             this.unsubscribeFromProcessor = null
@@ -281,67 +342,126 @@ export class MarkdownStreamParser {
         }
 
         const oldLength = this.content.length
+        const oldEndPosition = this.endPosition
         this.content += chunk
         this.lastProcessedIndex = this.content.length
+        this.endPosition = this.advancePosition(oldEndPosition, chunk)
 
-        // Store previous tree for change detection
-        this.previousTree = this.currentTree
+        const previousTree = this.currentTree
 
         // For proper incremental parsing, tell tree-sitter what changed
         if (this.currentTree) {
-            const getPosition = (index: number) => {
-                const textUpToIndex = this.content.substring(0, Math.min(index, this.content.length))
-                const lines = textUpToIndex.split('\n')
-                return {
-                    row: lines.length - 1,
-                    column: lines[lines.length - 1].length
-                }
-            }
-
             this.currentTree.edit({
                 startIndex: oldLength,
                 oldEndIndex: oldLength,
                 newEndIndex: this.content.length,
-                startPosition: getPosition(oldLength),
-                oldEndPosition: getPosition(oldLength),
-                newEndPosition: getPosition(this.content.length)
+                startPosition: oldEndPosition,
+                oldEndPosition,
+                newEndPosition: this.endPosition
             })
         }
 
         // Parse the updated content
-        this.currentTree = this.parser.parse(this.content, this.currentTree || undefined)
+        const parsedTree = this.parser.parse(this.content, this.currentTree || undefined)
+        if (!parsedTree) {
+            return []
+        }
+        this.currentTree = parsedTree
+        const currentTree = this.currentTree
 
-        // Detect backtracking by checking changed ranges
-        let backtrackOffset: number | undefined
-        if (this.previousTree && this.currentTree) {
-            const changedRanges = this.previousTree.getChangedRanges(this.currentTree)
+        // Detect backtracking by checking changed source ranges.
+        let affectedSourceOffset: number | undefined
+        if (previousTree && this.currentTree) {
+            const changedRanges = previousTree.getChangedRanges(this.currentTree)
 
             for (const range of changedRanges) {
-                // Convert byte offset to UTF-16 offset for the backtrack position
-                // If the change starts before what we've emitted, we need to backtrack
-                const changeStartUtf16 = this.byteToUtf16(range.startIndex)
+                // range.startIndex is already a UTF-16 character offset in web-tree-sitter JS bindings
+                // If the change starts before source that produced emitted output, we need to backtrack
+                const changeStartUtf16 = range.startIndex
 
-                if (changeStartUtf16 < this.generatorState.lastEmittedOffset) {
-                    // Check windowSize constraint
-                    const backtrackDistance = this.generatorState.lastEmittedOffset - changeStartUtf16
-
-                    if (this.config.windowSize === undefined || backtrackDistance <= this.config.windowSize) {
-                        // Backtrack is within window
-                        backtrackOffset = Math.min(backtrackOffset ?? Infinity, changeStartUtf16)
-                    } else {
-                        // Backtrack exceeds window - best effort
-                        // Set backtrack to the edge of the window
-                        const windowStart = this.generatorState.lastEmittedOffset - this.config.windowSize
-                        backtrackOffset = Math.min(backtrackOffset ?? Infinity, windowStart)
-                    }
+                if (changeStartUtf16 < this.generatorState.lastEmittedSourceOffset) {
+                    affectedSourceOffset = Math.min(affectedSourceOffset ?? Infinity, changeStartUtf16)
                 }
             }
         }
+        previousTree?.delete()
 
-        // Generate segments using the refactored module
+        const errorSourceOffset = this.findEarliestErrorOffset()
+        if (errorSourceOffset !== undefined && errorSourceOffset < this.generatorState.lastEmittedSourceOffset) {
+            affectedSourceOffset = Math.min(affectedSourceOffset ?? Infinity, errorSourceOffset)
+        }
+
+        if (affectedSourceOffset !== undefined) {
+            const recoverySelection = this.selectRecoveryCheckpoint(affectedSourceOffset)
+            const checkpoint = recoverySelection.appliedCheckpoint
+            const priorCheckpoints = this.generatorState.checkpoints
+            const preRecoveryLastEmittedOffset = this.generatorState.lastEmittedOffset
+            let state: SegmentGeneratorState = stateFromCheckpoint(checkpoint)
+            state = {
+                ...state,
+                checkpoints: this.restoreCheckpointHistory(priorCheckpoints, checkpoint),
+            }
+            let backtrackOffset = checkpoint.renderedOffset
+
+            // Re-generate all segments from backtrack point through end of content.
+            // generateSegments only processes one node per call, so we must loop
+            // through word-sized sub-ranges, matching how TokensStreamBuffer drives
+            // the parser in the normal path.
+            const allBacktrackSegments: StreamingChunk[] = []
+            const contentToReprocess = this.content.substring(checkpoint.sourceOffset)
+            const wordRanges = this.splitIntoWordRanges(contentToReprocess)
+
+            for (const range of wordRanges) {
+                const fromIdx = checkpoint.sourceOffset + range.start
+                const toIdx = checkpoint.sourceOffset + range.end
+                const result = generateSegments(fromIdx, toIdx, {
+                    content: this.content,
+                    currentTree,
+                    inlineParser: this.inlineParser,
+                    state,
+                    config: this.config,
+                })
+                state = result.state
+                allBacktrackSegments.push(...result.segments)
+            }
+
+            // Update state
+            this.generatorState = state
+
+            // Set backtrackOffset on the first re-generated chunk
+            if (allBacktrackSegments.length > 0) {
+                const firstSeg = allBacktrackSegments[0]
+                if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
+                    firstSeg.chunk.backtrackOffset = backtrackOffset
+                    firstSeg.chunk.recovery = recoverySelection.recovery
+                }
+            } else if (backtrackOffset < preRecoveryLastEmittedOffset) {
+                allBacktrackSegments.push({
+                    status: 'STREAMING',
+                    chunk: {
+                        text: '',
+                        offset: backtrackOffset,
+                        length: 0,
+                        block: { type: 'paragraph' },
+                        opening: [],
+                        closing: [],
+                        contained: [],
+                        backtrackOffset,
+                        recovery: recoverySelection.recovery,
+                    }
+                })
+            }
+
+            // Store all segments for debugging
+            this.allSegments.push(...allBacktrackSegments)
+
+            return allBacktrackSegments
+        }
+
+        // Normal path: no backtracking, generate segments for new content only
         const result = generateSegments(oldLength, this.content.length, {
             content: this.content,
-            currentTree: this.currentTree,
+            currentTree,
             inlineParser: this.inlineParser,
             state: this.generatorState,
             config: this.config,
@@ -350,34 +470,188 @@ export class MarkdownStreamParser {
         // Update state
         this.generatorState = result.state
 
-        // Add backtrackOffset to first chunk if needed
-        if (backtrackOffset !== undefined && result.segments.length > 0) {
-            const firstSeg = result.segments[0]
-            if (firstSeg.status === 'STREAMING' && firstSeg.chunk) {
-                firstSeg.chunk.backtrackOffset = backtrackOffset
-            }
-        }
-
         // Store all segments for debugging
         this.allSegments.push(...result.segments)
 
         return result.segments
     }
 
-    // Convert byte offset to UTF-16 code unit offset.
-    private byteToUtf16(byteOffset: number): number {
-        const encoder = new TextEncoder()
-        let utf16Offset = 0
-        let currentByteOffset = 0
-
-        for (const char of this.content) {
-            if (currentByteOffset >= byteOffset) break
-            const charBytes = encoder.encode(char).length
-            currentByteOffset += charBytes
-            utf16Offset += char.length
+    private selectRecoveryCheckpoint(sourceOffset: number): RecoverySelection {
+        const baseCheckpoint: SegmentGeneratorCheckpoint = {
+            sourceOffset: 0,
+            renderedOffset: 0,
+            lastEmittedSourceOffset: 0,
+            lastEmittedOffset: 0,
+            openSpans: [],
+            currentBlock: null,
+            pendingInlineContent: '',
         }
 
-        return utf16Offset
+        const checkpoints = this.generatorState.checkpoints.length > 0
+            ? [baseCheckpoint, ...this.generatorState.checkpoints]
+            : [baseCheckpoint]
+
+        let requiredCheckpoint = baseCheckpoint
+        for (const candidate of checkpoints) {
+            if (candidate.sourceOffset <= sourceOffset && candidate.sourceOffset >= requiredCheckpoint.sourceOffset) {
+                requiredCheckpoint = candidate
+            }
+        }
+
+        if (this.config.windowSize === undefined) {
+            return {
+                requiredCheckpoint,
+                appliedCheckpoint: requiredCheckpoint,
+            }
+        }
+
+        const windowStart = Math.max(0, this.generatorState.lastEmittedOffset - this.config.windowSize)
+        if (requiredCheckpoint.renderedOffset >= windowStart) {
+            return {
+                requiredCheckpoint,
+                appliedCheckpoint: requiredCheckpoint,
+            }
+        }
+
+        const appliedCheckpoint = checkpoints.find(candidate => candidate.renderedOffset >= windowStart)
+            ?? checkpoints[checkpoints.length - 1]
+
+        return {
+            requiredCheckpoint,
+            appliedCheckpoint,
+            recovery: {
+                type: 'window_overflow',
+                windowSize: this.config.windowSize,
+                fullBacktrackOffset: requiredCheckpoint.renderedOffset,
+                appliedBacktrackOffset: appliedCheckpoint.renderedOffset,
+            },
+        }
+    }
+
+    private findEarliestErrorOffset(): number | undefined {
+        if (!this.currentTree) return undefined
+
+        let earliestConcrete: number | undefined
+        let fallback: { offset: number; width: number; depth: number } | undefined
+
+        const visit = (node: Node, depth: number): boolean => {
+            if (!node.hasError && !node.isError && !node.isMissing) {
+                return false
+            }
+
+            if (node.isError || node.isMissing) {
+                earliestConcrete = Math.min(earliestConcrete ?? Infinity, node.startIndex)
+                return true
+            }
+
+            let recordedChild = false
+            for (const child of node.children) {
+                recordedChild = visit(child, depth + 1) || recordedChild
+            }
+
+            if (!recordedChild) {
+                const candidate = {
+                    offset: node.startIndex,
+                    width: node.endIndex - node.startIndex,
+                    depth,
+                }
+                if (
+                    !fallback ||
+                    candidate.depth > fallback.depth ||
+                    (candidate.depth === fallback.depth && candidate.width < fallback.width) ||
+                    (candidate.depth === fallback.depth && candidate.width === fallback.width && candidate.offset < fallback.offset)
+                ) {
+                    fallback = candidate
+                }
+                return true
+            }
+
+            return true
+        }
+
+        visit(this.currentTree.rootNode, 0)
+        return earliestConcrete ?? fallback?.offset
+    }
+
+    private restoreCheckpointHistory(
+        priorCheckpoints: SegmentGeneratorCheckpoint[],
+        selectedCheckpoint: SegmentGeneratorCheckpoint
+    ): SegmentGeneratorCheckpoint[] {
+        const checkpoints = priorCheckpoints
+            .filter(checkpoint => checkpoint.sourceOffset <= selectedCheckpoint.sourceOffset)
+
+        const selectedIndex = checkpoints.findIndex(checkpoint =>
+            checkpoint.sourceOffset === selectedCheckpoint.sourceOffset &&
+            checkpoint.renderedOffset === selectedCheckpoint.renderedOffset
+        )
+
+        const restored = selectedIndex === -1
+            ? [...checkpoints, selectedCheckpoint]
+            : checkpoints.map((checkpoint, index) => index === selectedIndex ? selectedCheckpoint : checkpoint)
+
+        return restored.sort((a, b) =>
+            a.sourceOffset - b.sourceOffset ||
+            a.renderedOffset - b.renderedOffset
+        )
+    }
+
+
+    // Split content into word-sized ranges matching TokensStreamBuffer's logic.
+    // Each range is { start, end } relative to the input string.
+    private splitIntoWordRanges(text: string): Array<{ start: number; end: number }> {
+        const ranges: Array<{ start: number; end: number }> = []
+        let i = 0
+
+        while (i < text.length) {
+            const segmentStart = i
+
+            // Skip leading whitespace
+            while (i < text.length && this.isWhitespace(text[i])) {
+                i++
+            }
+
+            // If only whitespace remains, include it as final range
+            if (i >= text.length) {
+                if (i > segmentStart) {
+                    ranges.push({ start: segmentStart, end: i })
+                }
+                break
+            }
+
+            // Consume non-whitespace (the word)
+            while (i < text.length && !this.isWhitespace(text[i])) {
+                i++
+            }
+
+            // Consume trailing whitespace
+            while (i < text.length && this.isWhitespace(text[i])) {
+                i++
+            }
+
+            ranges.push({ start: segmentStart, end: i })
+        }
+
+        return ranges
+    }
+
+    private isWhitespace(char: string): boolean {
+        return char === ' ' || char === '\t' || char === '\n' || char === '\r'
+    }
+
+    private advancePosition(position: { row: number; column: number }, text: string): { row: number; column: number } {
+        let row = position.row
+        let column = position.column
+
+        for (const char of text) {
+            if (char === '\n') {
+                row += 1
+                column = 0
+            } else {
+                column += char.length
+            }
+        }
+
+        return { row, column }
     }
 
     // Get the current accumulated content.
@@ -416,8 +690,9 @@ export class MarkdownStreamParser {
     // Reset the parser state.
     reset(): void {
         this.content = ''
+        this.currentTree?.delete()
         this.currentTree = null
-        this.previousTree = null
+        this.endPosition = { row: 0, column: 0 }
         this.lastProcessedIndex = 0
         this.allSegments = []
         this.generatorState = createInitialState()

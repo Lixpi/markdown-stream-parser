@@ -1,8 +1,8 @@
-import type { Parser } from 'web-tree-sitter'
-import { findActiveNodeAtPosition, findInlineNodeAtPosition } from './tree-navigation.js'
+import type { Parser, Tree, Node } from 'web-tree-sitter'
+import { findActiveNodeAtPosition, findInlineNodeAtPosition } from './tree-navigation.ts'
 
 // Check if there's a complete inline_link that overlaps with the given range.
-export function hasCompleteLinkAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteLinkAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const linkNodes = inlineRoot.descendantsOfType('inline_link')
     for (const link of linkNodes) {
         // Check if this link overlaps with our range
@@ -18,7 +18,7 @@ export function hasCompleteLinkAt(inlineRoot: Parser.SyntaxNode, startPos: numbe
 }
 
 // Check if there's a complete image that overlaps with the given range.
-export function hasCompleteImageAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteImageAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const imageNodes = inlineRoot.descendantsOfType('image')
     for (const img of imageNodes) {
         // Check if this image overlaps with our range
@@ -112,7 +112,7 @@ export function hasIncompleteImageOpening(text: string, inlineParser: Parser | n
 }
 
 // Check if there's a complete code_span that overlaps with the given range.
-export function hasCompleteCodeSpanAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteCodeSpanAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const codeSpans = inlineRoot.descendantsOfType('code_span')
     for (const span of codeSpans) {
         // Check if this code_span overlaps with our range
@@ -128,7 +128,7 @@ export function hasCompleteCodeSpanAt(inlineRoot: Parser.SyntaxNode, startPos: n
 }
 
 // Check if there's a complete strong_emphasis that overlaps with the given range.
-export function hasCompleteBoldAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteBoldAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const strongNodes = inlineRoot.descendantsOfType('strong_emphasis')
     for (const span of strongNodes) {
         // Check if this strong_emphasis overlaps with our range
@@ -144,7 +144,7 @@ export function hasCompleteBoldAt(inlineRoot: Parser.SyntaxNode, startPos: numbe
 }
 
 // Check if there's a complete emphasis that overlaps with the given range.
-export function hasCompleteItalicAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteItalicAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const emphasisNodes = inlineRoot.descendantsOfType('emphasis')
     for (const span of emphasisNodes) {
         // Check if this emphasis overlaps with our range
@@ -160,7 +160,7 @@ export function hasCompleteItalicAt(inlineRoot: Parser.SyntaxNode, startPos: num
 }
 
 // Check if there's a complete strikethrough that overlaps with the given range.
-export function hasCompleteStrikethroughAt(inlineRoot: Parser.SyntaxNode, startPos: number, endPos: number): boolean {
+export function hasCompleteStrikethroughAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const strikethroughNodes = inlineRoot.descendantsOfType('strikethrough')
     for (const span of strikethroughNodes) {
         // Check if this strikethrough overlaps with our range
@@ -243,12 +243,12 @@ export function hasUnmatchedItalicMarker(text: string, inlineParser: Parser | nu
 // Check if the position is inside a fenced_code_block or code_span (inline code).
 // Used to skip italic buffering inside code contexts where _ is common in variable names.
 export function isInsideCodeBlock(
-    node: Parser.SyntaxNode,
+    node: Node,
     position: number,
-    currentTree: Parser.Tree | null,
+    currentTree: Tree | null,
     inlineParser: Parser | null
 ): boolean {
-    let current: Parser.SyntaxNode | null = findActiveNodeAtPosition(node, position)
+    let current: Node | null = findActiveNodeAtPosition(node, position)
 
     while (current) {
         if (current.type === 'fenced_code_block' || current.type === 'code_fence_content') {
@@ -281,14 +281,14 @@ export function isInsideCodeBlock(
 // Detect active inline styles at the given position range.
 // Checks both the inline tree and block tree for style nodes.
 export function detectActiveStyles(
-    node: Parser.SyntaxNode,
+    node: Node,
     startIdx: number,
     endIdx: number,
-    currentTree: Parser.Tree | null,
+    currentTree: Tree | null,
     inlineParser: Parser | null
 ): string[] {
     const styles: Set<string> = new Set()
-    let current: Parser.SyntaxNode | null = node
+    let current: Node | null = node
 
     // First, find the inline node from the BLOCK tree (not the inline tree)
     // to get document-relative positions
