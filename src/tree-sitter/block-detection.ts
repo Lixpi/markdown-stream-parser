@@ -2,15 +2,19 @@ import type { Node } from 'web-tree-sitter'
 import { HEADER_MARKER_LEVELS, type BlockInfo, type BlockState } from './types.ts'
 import { findBlockNode } from './tree-navigation.ts'
 import { getListMetadata } from './list-support.ts'
+import { getTableBlockInfo } from './table-support.ts'
 
 // Get the block type and properties from a tree-sitter node.
 // Walks up the tree to find the enclosing block structure.
 export function getBlockInfo(node: Node): BlockInfo {
     const list = getListMetadata(node)
+    const tableBlockInfo = getTableBlockInfo(node, list)
+    if (tableBlockInfo) {
+        return tableBlockInfo
+    }
+
     let current: Node | null = node
     let foundParagraph = false
-    let foundTableCell = false
-    let isInHeader = false
 
     while (current) {
         switch (current.type) {
@@ -36,30 +40,6 @@ export function getBlockInfo(node: Node): BlockInfo {
             case 'blockquote':
                 // If we found a paragraph inside a blockquote, return blockquote
                 return { type: 'blockquote', list }
-            // Table types
-            case 'pipe_table_cell':
-                foundTableCell = true
-                break
-            case 'pipe_table_header':
-                isInHeader = true
-                // If we found a cell inside a header, return table_header_cell
-                if (foundTableCell) {
-                    return { type: 'table_header_cell', id: current.id, list }
-                }
-                break
-            case 'pipe_table_row':
-                // If we found a cell inside a regular row, return table_cell
-                if (foundTableCell) {
-                    return { type: 'table_cell', id: current.id, list }
-                }
-                break
-            case 'pipe_table':
-                // Found the table - if we have a cell, determine type based on header flag
-                if (foundTableCell) {
-                    return { type: isInHeader ? 'table_header_cell' : 'table_cell', id: current.id, list }
-                }
-                // Otherwise just return table
-                return { type: 'table', list }
         }
 
         current = current.parent

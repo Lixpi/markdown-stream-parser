@@ -188,6 +188,7 @@ type BlockContext = {
         | 'list_item'
         | 'table'
         | 'table_row'
+        | 'table_header_cell'
         | 'table_cell'
         | 'blockquote'
     level?: number
@@ -199,6 +200,13 @@ type BlockContext = {
         ordinal?: number
         task?: { checked: boolean }
     }
+    table?: {
+        tableId: string
+        rowIndex: number
+        columnIndex: number
+        cellId: string
+        align?: 'left' | 'center' | 'right'
+    }
 }
 ```
 
@@ -209,6 +217,12 @@ type BlockContext = {
 For unordered items, `marker` is the bullet character from the source: `-`, `+`, or `*`. For ordered items, `marker` is the delimiter only: `.` or `)`. The list number is exposed separately as `ordinal` when it is safely representable as a JavaScript number, so `10.` becomes `{ ordinal: 10, marker: '.' }`.
 
 Task list items omit the checkbox marker and following space from rendered text. `[x]` and `[X]` produce `task: { checked: true }`; `[ ]` produces `task: { checked: false }`.
+
+`table` is present when the chunk is inside a table cell. `tableId` identifies the enclosing table, `rowIndex` is zero-based with the header row at `0`, `columnIndex` is zero-based within the row, `cellId` is a stable `${tableId}:${rowIndex}:${columnIndex}` grouping key, and `align` reflects the parsed delimiter row when specified.
+
+Chunks are streamed at content boundaries, not at Markdown table-cell boundaries. One Markdown cell can produce multiple chunks. Consumers that need to rebuild a visual table should group chunks by `block.table.tableId`, then by `rowIndex`, then by `cellId`.
+
+Compatibility note: header cell chunks now use `block.type === 'table_header_cell'`. Consumers that previously treated all table header content as `table_cell` should update that branch.
 
 When `includeRawStreamedToken` is enabled, `original` contains the raw Markdown source associated with the emitted chunk. It is separate from the rendered UTF-16 coordinate space.
 
@@ -327,7 +341,7 @@ The parser handles these structures in its exercised parsing paths:
 - Nested and loose list items
 - Task list items with checked and unchecked state
 - Bold, italic, bold-italic, strikethrough, and inline code spans
-- Pipe-table cells and delimiter suppression for covered table forms
+- Pipe tables with header-cell detection, delimiter suppression, alignment metadata, and stable per-cell grouping keys for covered table forms
 
 Link and image span extraction is implemented, including URL and image metadata, but dedicated coverage is still needed for those paths.
 
@@ -342,7 +356,7 @@ The parser removes structural list indentation from rendered output. Rendered li
 These structures are incomplete or unsupported:
 
 - Blockquote marker stripping and nested blockquotes
-- Full table behavior across all valid table shapes
+- Full coverage for every valid Markdown table shape
 - Horizontal rules
 - Footnotes
 - HTML blocks

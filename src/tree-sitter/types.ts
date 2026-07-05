@@ -45,6 +45,7 @@ export type BlockType =
     | 'list_item'
     | 'table'
     | 'table_row'
+    | 'table_header_cell'
     | 'table_cell'
     | 'blockquote'
 
@@ -57,6 +58,8 @@ export type BlockContext = {
     language?: string
     // For content inside a Markdown list item.
     list?: ListMetadata
+    // For content inside a Markdown table cell.
+    table?: TableMetadata
 }
 
 export type ListMetadata = {
@@ -65,6 +68,16 @@ export type ListMetadata = {
     marker: '-' | '+' | '*' | '.' | ')'
     ordinal?: number
     task?: { checked: boolean }
+}
+
+export type TableAlignment = 'left' | 'center' | 'right'
+
+export type TableMetadata = {
+    tableId: string
+    rowIndex: number
+    columnIndex: number
+    cellId: string
+    align?: TableAlignment
 }
 
 // ============================================================================
@@ -186,7 +199,7 @@ export type BlockInfo = {
     level?: number
     language?: string
     list?: ListMetadata
-    id?: number
+    table?: TableMetadata
 }
 
 // Context passed to inline style extractors

@@ -69,8 +69,9 @@ export function mapBlockType(type: string): BlockType {
             return 'table'
         case 'pipe_table_row':
             return 'table_row'
-        case 'pipe_table_cell':
         case 'table_header_cell':
+            return 'table_header_cell'
+        case 'pipe_table_cell':
         case 'table_cell':
             return 'table_cell'
         case 'blockquote':
@@ -95,6 +96,9 @@ export function createBlockContext(blockInfo: BlockInfo): BlockContext {
     }
     if (blockInfo.list !== undefined) {
         context.list = blockInfo.list
+    }
+    if (blockInfo.table !== undefined) {
+        context.table = blockInfo.table
     }
 
     return context
