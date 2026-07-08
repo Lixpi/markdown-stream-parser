@@ -1,10 +1,32 @@
 # Migrate svelte-demo rendering to ProseMirror (LIX-MDSP-20)
 
+## Completed follow-up review findings (2026-07-08)
+
+The plan below has been implemented (new module in `demo/svelte-demo/src/lib/prosemirror/`, legacy rendering removed from `+page.svelte`). The post-implementation review items were applied inside the docker container `lixpi-markdown-stream-parser-demo`.
+
+### 1. Fixed the demo test run
+Added `demo/svelte-demo/vitest.config.ts` so the demo runner includes only `src/**/*.test.ts` and excludes generated `.svelte-kit/**` output. `pnpm --dir demo/svelte-demo run test` now passes with the real ProseMirror unit/integration tests only.
+
+### 2. Restored strict demo typechecking
+Restored `"strict": true` in `demo/svelte-demo/tsconfig.json` and kept `"allowImportingTsExtensions": true`. Strict-mode errors came from the root parser source imported by the demo, so nullable tree-sitter parse results now have explicit guards in `src/tree-sitter/inline-detection.ts` and `src/tree-sitter/segment-generator.ts`. `pnpm --dir demo/svelte-demo run check` now reports 0 errors.
+
+### 3. Styled open spans during streaming
+`buildInlineContent` now tracks open non-link/image spans across block chunks and applies live marks for bold/italic/code/strikethrough until a matching closing span or the current buffer end. Link/image behavior stays closed-only for URL metadata safety. Added unit tests for a multi-chunk bold span and an unclosed bold span at the end of the current buffer.
+
+### 4. Reviewed out-of-scope edits
+- Kept the type-only `Edit` cast in `src/tree-sitter-markdown-stream-parser.ts` because current `web-tree-sitter` types require `editPoint`/`editRange` even though the runtime accepts the existing edit shape. Removing it breaks strict demo typechecking.
+- Reverted the root Vitest expansion so root tests stay scoped to `src/**/*.test.ts`; demo tests run through `pnpm --dir demo/svelte-demo run test`.
+
+### 5. Verified examples and controls path
+The dev server is running at `http://localhost:5173` and responds with HTTP 200. The container has no Chromium/Firefox/Playwright/Puppeteer binary, so real browser automation could not be executed there. Added `stream-examples.integration.test.ts` to replay the real JSON token streams through the parser and ProseMirror assembly, covering heading/list/emphasis examples, code blocks, backtracking self-correction with no stale active text, strikethrough, tables, task-list metadata, reset, replay after completion, and switching examples at the buffer level.
+
+Everything else was verified as conforming: module layering and function signatures (including the `buildContentFromChunks(schema, chunks): Fragment` core required for Lixpi portability), schema node/mark parity with Lixpi, URL sanitization rules and plain-text fallback, editor wiring, legacy-code deletion in `+page.svelte` with the shared `isChunkBeforeBacktrack` used by both debug and renderer paths, dependency set, CSS, and `svelte-check` (0 errors).
+
 ## Context
 
 The demo at `demo/svelte-demo` currently renders the parser's streaming output with an ad-hoc, hand-written rendering layer inside `src/routes/+page.svelte` (~898 lines): a reactive block-grouping state machine (`parsedBlocks`), manual open-span tracking, table reconstruction (`buildTableRows`), and a giant `{#each}/{#if}` markup tree with Tailwind span classes. This is the "legacy state-machine code" to replace.
 
-Goal: replace that rendering layer with ProseMirror, following the architecture of the Lixpi main repo (workspace-local shallow clone currently available at `/tmp/claude-1000/-home-dima-Desktop-markdown-stream-parser/8b99adf2-a3b8-4241-898c-740929163041/scratchpad/lixpi-ref`; do not rely on this path outside this workspace): a framework-free ProseMirror module (schema + pure stream-assembly functions) driving an `EditorView` via transactions.
+Goal: replace that rendering layer with ProseMirror, following the architecture of the Lixpi main repo (local checkout at `/home/dima/Desktop/lixpi`; reference files in `packages/lixpi/prosemirror/src/`): a framework-free ProseMirror module (schema + pure stream-assembly functions) driving an `EditorView` via transactions.
 
 **Key adaptation vs Lixpi:** Lixpi's `packages/lixpi/prosemirror/src/stream-assembly.ts` consumes the OLD parser segment shape (`{segment, styles[], type, isBlockDefining}`). This repo's tree-sitter parser emits a new offset-based `Chunk` shape (`src/tree-sitter/types.ts`): `{text, offset, length, block:{type, level?, language?, list?, table?}, opening/closing/contained spans, backtrackOffset?, recovery?}` wrapped in `StreamingChunk` (`START_STREAM | STREAMING | END_STREAM`). Lixpi's schema also lacks list/table nodes, which this parser emits. So we replicate the *architecture*, not the code verbatim.
 
@@ -17,11 +39,11 @@ Goal: replace that rendering layer with ProseMirror, following the architecture 
 ## New files (all under `demo/svelte-demo/src/lib/prosemirror/`)
 
 ### 1. `schema.ts`
-Adapt Lixpi's `base-schema.ts` (scratchpad ref above), extend with lists/tables, drop lixpi-only nodes. Read-only view ⇒ `parseDOM` optional.
+Adapt Lixpi's `base-schema.ts` (`/home/dima/Desktop/lixpi/packages/lixpi/prosemirror/src/base-schema.ts`), extend with lists/tables, drop lixpi-only nodes. Read-only view ⇒ `parseDOM` optional.
 
 Nodes:
 - `doc` (`block+`), `paragraph` (`inline*` → `['p', 0]`), `heading` (attr `level`, → `h1..h6`), `code_block` (attr `language`, `content:'text*'`, `marks:''`, `code:true`, → `['pre', {'data-language': language}, ['code', 0]]`), `blockquote` (`block+`), `text`
-- `bullet_list` (`list_item+` → `['ul', 0]`), `ordered_list` (attr `order` → `['ol', {start}, 0]`), `list_item` (attr `task: null|{checked}`, `content:'block+'`, → `['li', {'data-task': checked|unchecked}, 0]`)
+- `bullet_list` (`list_item+` → `['ul', 0]`), `ordered_list` (attr `order` → `['ol', {start}, 0]`), `list_item` (attr `task: null|{checked}`, `content:'block+'`, → `['li', {'data-task': 'checked'|'unchecked'}, 0]`; attribute omitted entirely for non-task items)
 - `table` (`table_row+` → `['table', ['tbody', 0]]`), `table_row` (`(table_header_cell|table_cell)+` → `['tr', 0]`), `table_header_cell`/`table_cell` (attr `align`, `content:'inline*'`, → `['th'|'td', {style:'text-align: ...'}, 0]`)
 - `image` — **inline** (`inline:true`, group `inline`, attrs `src`, `alt`) since the parser emits images as inline spans
 
@@ -82,13 +104,13 @@ Mirrors Lixpi's `ProseMirror.svelte` mount pattern: `bind:this={mountEl}` div wi
 
 ### 5. `prosemirror.css`
 - `.ProseMirror { outline: none; word-wrap: break-word; }` (no global `pre-wrap`; trim newlines in assembly instead)
-- Task-list checkboxes via `li[data-task]::before` (☐/☑), code-block language badge via `pre[data-language]::after`, table `th/td` borders to match old look.
+- Task-list checkboxes via `li[data-task="unchecked"]::before` (☐) / `li[data-task="checked"]::before` (☑) plus `list-style: none` on task items, code-block language badge via `pre[data-language]::after { content: attr(data-language) }`, table `th/td` borders to match old look.
 
 ## Modified files
 
 ### `demo/svelte-demo/src/routes/+page.svelte`
 - Replace the `{#each parsedBlocks ...}` markup (lines ~596–829) with `<ProseMirrorRenderer bind:this={pmRenderer} />` in the same card div.
-- Subscription callback (~135–198): add `pmRenderer?.handleStreamingChunk(parsed)`; keep `parsedSegments` accumulation + backtrack filtering (feeds debug columns) and the backtrack `console.warn`.
+- Subscription callback (~135–198): add `pmRenderer?.handleStreamingChunk(parsed)`; keep `parsedSegments` accumulation + backtrack filtering (feeds debug columns) and the backtrack `console.warn`. Replace the page's inline backtrack predicate (`seg.chunk.offset + seg.chunk.length <= chunk.backtrackOffset`, line ~183) with the shared `isChunkBeforeBacktrack` import so debug and renderer paths cannot drift.
 - `resetParser()` (~302): add `pmRenderer?.reset()`.
 - Delete dead code: `parsedBlocks` reactive block, `buildTableRows`, `getTableAlignClass`, `getTableCellAlignClass`, `isTableCellBlockType`, `getSpanClasses`, `hasCodeStyle`, `getActiveSpanTypes`, `updateOpenSpans` + `openSpans` state, `TableCellGroup`/`TableRowGroup`/`TableAlign` types.
 - Keep: example picker, delay slider, play/pause/step/reset, and all debug columns (Current Token, Parsed Chunks JSON, raw tokens, concatenated txt).
@@ -97,7 +119,7 @@ Mirrors Lixpi's `ProseMirror.svelte` mount pattern: `bind:this={mountEl}` div wi
 Add direct dependencies actually imported by the implementation: `prosemirror-model`, `prosemirror-state`, and `prosemirror-view`. Add `prosemirror-transform` only if implementation code imports it directly. Add `vitest` as a devDependency plus a `test` script because the demo package currently has `check` but no test runner.
 
 ### `demo/svelte-demo/src/lib/prosemirror/stream-assembly.test.ts`
-Add focused unit tests for the pure assembly layer, including URL sanitization and shared backtrack behavior.
+Add focused unit tests for the pure assembly layer: backtrack filtering shared by buffer/debug paths, nested lists, ordered-list start attrs, task lists, tables, link/image URL sanitization and rejection, open/closed/contained spans, zero-length text skipping, and malformed mid-stream states falling back instead of throwing. Test style reference: `/home/dima/Desktop/lixpi/packages/lixpi/prosemirror/src/stream-assembly.test.ts`.
 
 ### `demo/svelte-demo/src/app.css`
 Add `@import './lib/prosemirror/prosemirror.css';` (Tailwind v4 CSS-first; typography plugin already loaded).
@@ -105,7 +127,7 @@ Add `@import './lib/prosemirror/prosemirror.css';` (Tailwind v4 CSS-first; typog
 ## Implementation order
 
 1. `docker compose up -d`; then `docker exec lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo add prosemirror-model prosemirror-state prosemirror-view` (add `prosemirror-transform` only if directly imported)
-2. Add the demo test runner: `docker exec lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo add -D vitest`, then add a `test` script.
+2. Add the demo test runner: `docker exec lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo add -D vitest`, then add a `"test": "vitest run"` script (non-watch mode; `pnpm add` will also trigger the demo's `postinstall` WASM copy — expected).
 3. Implement `schema.ts`
 4. Implement `stream-assembly.ts` (port grouping/table logic from `+page.svelte`)
 5. Add `stream-assembly.test.ts` for the pure assembly layer.
@@ -115,17 +137,25 @@ Add `@import './lib/prosemirror/prosemirror.css';` (Tailwind v4 CSS-first; typog
 
 ## Verification (all inside the container)
 
-1. Add focused unit tests for `stream-assembly.ts`: backtrack filtering shared by buffer/debug paths, nested lists, ordered-list start attrs, task lists, tables, link/image URL sanitization and rejection, open/closed/contained spans, zero-length text skipping, and malformed mid-stream states falling back instead of throwing.
-2. Run the unit tests inside the container.
-3. `docker exec -d lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo run dev` (predev regenerates the manifest; binds 0.0.0.0:5173 → host 5173). Open `http://localhost:5173`.
-4. Exercise examples from `demo/svelte-demo/static/llm-streams-examples/`:
+1. Unit tests from implementation step 5 pass: `docker exec lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo run test`.
+2. `docker exec -d lixpi-markdown-stream-parser-demo pnpm --dir demo/svelte-demo run dev` (predev regenerates the manifest; binds 0.0.0.0:5173 → host 5173). Open `http://localhost:5173`.
+3. Exercise examples from `demo/svelte-demo/static/llm-streams-examples/`:
    - headings/paragraphs/bold/italic/lists: `claude-3.5-1-quantum-physics`, `gpt-4.o-history-of-cats`
    - fenced code blocks + language: `claude-3.7-happy-number-5-programs`, `gpt-4.5-cat-coding`
    - **backtracking**: `claude-3.7-markdown-with-nested-code-block`, `test-error-recovery` — watch for `⚠️ BACKTRACK` console warning; PM doc must self-correct with no stale/duplicated text
    - strikethrough: `test-strikethrough`; find table/task-list examples via `grep -l '|' static/llm-streams-examples/*.txt` and `grep -l '\- \['`
-5. Controls: full play to END_STREAM; pause + single-step (doc updates chunk-by-chunk); reset mid-stream (doc clears); replay after completion (restarts, doesn't append); switch example mid-stream.
-6. Debug columns still behave identically.
-7. `pnpm --dir demo/svelte-demo run check` passes.
+4. Controls: full play to END_STREAM; pause + single-step (doc updates chunk-by-chunk); reset mid-stream (doc clears); replay after completion (restarts, doesn't append); switch example mid-stream.
+5. Debug columns still behave identically.
+6. `pnpm --dir demo/svelte-demo run check` passes.
+
+## Portability to main Lixpi
+
+This parser is a tool for main Lixpi, which still consumes the deprecated legacy parser shape (`{segment, styles[], isBlockDefining}`). This demo's module is the reference implementation for the new `Chunk` shape → ProseMirror mapping, so preserve these guarantees during implementation:
+
+- `stream-assembly.ts` stays framework-free and schema-parameterized (no import of the demo schema instance) so it runs against Lixpi's `createProseMirrorSchema(...)` schemas unchanged.
+- Node/mark names stay identical to Lixpi's `base-schema.ts` (`paragraph`, `heading`, `code_block`, `blockquote`, `strong`, `em`, `code`, `strikethrough`, `link`); new list/table NodeSpecs are plain spec objects portable into Lixpi's `node-specs.ts`.
+- `buildDocFromChunks` must be a thin wrapper over a `buildContentFromChunks(schema, chunks): Fragment` core. The demo replaces the whole doc; main Lixpi will instead rebuild the content of a target node (e.g. `aiResponseMessage`) and emit one bounded ReplaceStep per update — compatible with its `HeadlessProseMirrorEngine` + step-publishing pipeline without whole-doc steps.
+- URL sanitizers remain pure/exported for reuse in Lixpi's server-side assembler.
 
 ## Risks / notes
 
