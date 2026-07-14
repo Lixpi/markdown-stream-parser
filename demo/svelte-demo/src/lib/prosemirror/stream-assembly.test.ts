@@ -45,6 +45,13 @@ describe('stream assembly helpers', () => {
         expect(sanitizeImageSrc('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA')
         expect(sanitizeImageSrc('//example.com/image.png')).toBeNull()
         expect(sanitizeImageSrc('data:text/html;base64,AAAA')).toBeNull()
+        expect(sanitizeImageSrc('image.png')).toBe('image.png')
+        expect(sanitizeImageSrc('../image.png')).toBe('../image.png')
+        expect(sanitizeImageSrc('?cache=1')).toBeNull()
+        expect(sanitizeImageSrc('#fragment')).toBeNull()
+        expect(sanitizeImageSrc('JaVaScRiPt:alert(1)')).toBeNull()
+        expect(sanitizeImageSrc('data:image/svg+xml;base64,PHN2Zz4=')).toBeNull()
+        expect(sanitizeImageSrc('data:image/jpeg;base64,AAAA')).toBe('data:image/jpeg;base64,AAAA')
     })
 
     it('builds marks and rejects unsafe links', () => {
@@ -145,6 +152,36 @@ describe('stream assembly helpers', () => {
         expect(doc.child(1).type.name).toBe('table')
         expect(doc.child(2).type.name).toBe('code_block')
         expect(doc.child(2).attrs.language).toBe('ts')
+        expect(() => doc.check()).not.toThrow()
+    })
+
+    it('preserves same-depth siblings, nested siblings, and the parent list on return', () => {
+        const list = (text: string, offset: number, depth: number, type: 'ordered' | 'unordered' = 'unordered', ordinal?: number) => chunk({
+            text,
+            offset,
+            block: { type: 'list_item', list: { type, depth, marker: type === 'ordered' ? '.' : '-', ordinal } },
+        })
+        const doc = buildDocFromChunks(schema, [
+            list('one\n', 0, 0), list('child a\n', 4, 1), list('child b\n', 12, 1), list('two', 20, 0),
+            list('numbered', 23, 0, 'ordered', 3),
+        ])
+        expect(doc.child(0).type.name).toBe('bullet_list')
+        expect(doc.child(0).childCount).toBe(2)
+        const nested = doc.child(0).child(0).lastChild!
+        expect(nested.type.name).toBe('bullet_list')
+        expect(nested.childCount).toBe(2)
+        expect(doc.child(1).type.name).toBe('ordered_list')
+        expect(doc.child(1).attrs.order).toBe(3)
+        expect(() => doc.check()).not.toThrow()
+    })
+
+    it('projects a closed image span across chunks once while retaining surrounding text', () => {
+        const nodes = buildInlineContent(schema, [
+            chunk({ text: 'before lo', offset: 0 }),
+            chunk({ text: 'go after', offset: 9, closing: [{ type: 'image', offset: 7, length: 4, src: 'image.png', alt: 'logo' }] }),
+        ])
+        expect(nodes.map(node => node.isText ? node.text : `[${node.type.name}]`).join('')).toBe('before [image] after')
+        expect(nodes.filter(node => node.type.name === 'image')).toHaveLength(1)
     })
 
     it('falls back instead of throwing for malformed block states', () => {
@@ -154,5 +191,6 @@ describe('stream assembly helpers', () => {
 
         expect(doc.type.name).toBe('doc')
         expect(doc.childCount).toBeGreaterThan(0)
+        expect(() => doc.check()).not.toThrow()
     })
 })

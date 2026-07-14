@@ -1,5 +1,54 @@
 # Migrate svelte-demo rendering to ProseMirror (LIX-MDSP-20)
 
+## TODO - ProseMirror adjacency review findings (2026-07-14)
+
+The demo migration is architecturally aligned with Lixpi, but the following issues must be resolved before treating it as a promotion-ready reference implementation. The current Lixpi reference is `/home/dima/Desktop/lixpi/packages/lixpi/prosemirror/src/shared/`; its schema and bounded transaction APIs have evolved since the original plan was written.
+
+### 1. Preserve sibling and nested list topology (blocker)
+`buildContentFromChunks` currently calls `flushLists(list.depth - 1)` before every list item. Because `flushLists` pops frames whose depth is greater than the supplied depth, a same-depth sibling flushes the current list and starts another list node. Nested siblings can likewise become multiple nested list nodes instead of items in one list.
+
+Fix the depth-stack transition so it:
+- keeps the current frame for a sibling with the same depth and list type;
+- flushes only deeper frames when returning to a shallower depth;
+- flushes and replaces the current frame when the list type changes at the same depth;
+- preserves ordered-list starts and attaches nested lists to the correct parent item.
+
+Add structural tests that assert one list contains multiple sibling `list_item` nodes, nested siblings share one nested list, mixed ordered/unordered transitions produce the intended separate lists, and returning from a nested list continues the original parent list.
+
+### 2. Define and implement the real Lixpi portability contract (blocker)
+The statement that `buildContentFromChunks(schema, chunks)` runs against Lixpi's `createProseMirrorSchema(...)` unchanged is currently false:
+- the demo defines `image` as inline, while current Lixpi defines `image` as a block node;
+- current Lixpi schemas do not include `bullet_list`, `ordered_list`, `list_item`, or table node types;
+- current Lixpi documents use composed roots and target nodes such as `documentTitle`, `aiChatThread`, and `aiResponseMessage`;
+- Lixpi streaming publishes bounded transaction steps, while the demo replaces the entire document.
+
+Decide the canonical contract, then either extend Lixpi's schema builder with the portable list/table/image specs or make assembly capability-aware through an explicit adapter. Add a Lixpi-side adapter that replaces only the target response node content and returns transaction steps compatible with `HeadlessProseMirrorEngine`. Add contract tests using the actual `createProseMirrorSchema(DOCUMENT_TYPE.AI_CHAT_THREAD)` schema. Update this plan's portability claims to describe the resulting contract precisely.
+
+### 3. Make integration tests reproducible from a clean checkout
+`stream-examples.integration.test.ts` reads fixtures from ignored/generated `demo/svelte-demo/static/llm-streams-examples`, but `pnpm --dir demo/svelte-demo run test` does not run `copy-llm-examples`. A clean checkout therefore lacks the test inputs.
+
+Read fixtures directly from tracked `demo/llm-streams-examples`, or add an explicit test preparation step. Verify the test command succeeds after removing generated Svelte/static output and without first running dev/build/prepack.
+
+### 4. Align image URL sanitization with the documented policy
+`sanitizeImageSrc` accepts `/...`, `./...`, and `../...`, but rejects bare path-relative sources such as `image.png`, despite the plan allowing path-relative URLs. Define the allowed `data:image/*` MIME types rather than accepting every image subtype through one broad regex; explicitly decide whether SVG data URLs are permitted.
+
+Add tests for bare relative paths, query/hash-only edge cases, protocol-relative URLs, encoded or mixed-case script schemes, raster data URLs, SVG data URLs, malformed data URLs, and non-image data URLs. Unsafe sources must remain plain covered text.
+
+### 5. Assemble images whose closed span crosses chunk boundaries
+`buildTextRuns` currently recognizes an image only when the complete image span exactly matches one run inside one chunk. A closed image span covering multiple chunks remains text instead of being replaced by one image node.
+
+Build image projection from absolute span ranges across the block, consume all covered text runs once the span closes, and insert exactly one sanitized image node. Keep open image spans as plain text until metadata becomes available. Add tests for contained, multi-chunk closing, unsafe multi-chunk, adjacent, and image-with-surrounding-text cases.
+
+### 6. Enforce schema validity and make malformed fallback observable
+The malformed-table test only asserts that a document exists. `NodeType.create` can construct an empty table or row that violates its content expression without throwing, so the broad catch fallback may never run.
+
+Validate assembled block nodes or the completed document with `check()`/`validContent`, use `createAndFill` where appropriate, and fall back to a paragraph when partial metadata cannot form a valid node. Do not silently hide schema-contract programming errors: distinguish expected incomplete-stream fallback from unexpected assembly failures. Add assertions that malformed and partial states pass `doc.check()` and that valid partial table states retain all available cells.
+
+### 7. Complete real browser verification and correct stale completion claims
+The current integration tests exercise parser-to-buffer-to-document projection, but they do not exercise `EditorView`, Svelte lifecycle, controls, debug columns, or rendered DOM. The plan also states that the dev server is running, which is transient environment state rather than a completed repository guarantee.
+
+Add browser E2E coverage for full play, pause/resume, single-step, reset mid-stream, replay after completion, switching examples mid-stream, backtrack correction, and rendered heading/list/code/table/task/strikethrough/image output. Assert the debug columns stay synchronized with the ProseMirror projection. Run this in a container/image that includes the selected browser runtime, then replace transient statements in the completed-findings section with reproducible commands and recorded outcomes.
+
 ## Completed follow-up review findings (2026-07-08)
 
 The plan below has been implemented (new module in `demo/svelte-demo/src/lib/prosemirror/`, legacy rendering removed from `+page.svelte`). The post-implementation review items were applied inside the docker container `lixpi-markdown-stream-parser-demo`.

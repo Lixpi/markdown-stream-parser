@@ -1,465 +1,251 @@
 import { Fragment, type Mark, type Node as ProseMirrorNode, type Schema } from 'prosemirror-model'
-import type { Chunk, ClosedSpan, OpenSpan, Span, SpanType } from '../../../../../src/markdown-stream-parser.ts'
+import type { Chunk, ClosedSpan, OpenSpan, SpanType } from '../../../../../src/markdown-stream-parser.ts'
 
-type BlockType = Chunk['block']['type']
 type ListMetadata = NonNullable<Chunk['block']['list']>
-type ListFrame = {
-    type: ListMetadata['type']
-    depth: number
-    order: number
-    items: ProseMirrorNode[]
-}
-type CellGroup = {
-    cellId: string
-    columnIndex: number
-    type: 'table_header_cell' | 'table_cell'
-    align?: 'left' | 'center' | 'right'
-    chunks: Chunk[]
-}
-type MarkRange = {
-    type: SpanType
-    start: number
-    end: number
-}
+type ListFrame = { type: ListMetadata['type']; depth: number; order: number; items: ProseMirrorNode[] }
+type CellGroup = { cellId: string; columnIndex: number; type: 'table_header_cell' | 'table_cell'; align?: 'left' | 'center' | 'right'; chunks: Chunk[] }
+type MarkRange = { type: Exclude<SpanType, 'link' | 'image'>; start: number; end: number }
+type TextRun = { start: number; end: number; text: string; image?: ClosedSpan & { type: 'image'; src: string; alt?: string } }
 
 export function isChunkBeforeBacktrack(chunk: Chunk, backtrackOffset: number): boolean {
     return chunk.offset + chunk.length <= backtrackOffset
 }
 
 export function applyStreamingChunkToBuffer(buffer: Chunk[], chunk: Chunk): Chunk[] {
-    const next = chunk.backtrackOffset === undefined
-        ? buffer
-        : buffer.filter(bufferedChunk => isChunkBeforeBacktrack(bufferedChunk, chunk.backtrackOffset!))
+    const next = chunk.backtrackOffset === undefined ? buffer : buffer.filter(item => isChunkBeforeBacktrack(item, chunk.backtrackOffset!))
     return [...next, chunk]
 }
 
 export function sanitizeLinkHref(rawHref: string): string | null {
     const href = rawHref.trim()
     if (!href) return null
-
     try {
         const url = new URL(href)
-        return url.protocol === 'http:' || url.protocol === 'https:' || url.protocol === 'mailto:'
-            ? href
-            : null
-    } catch {
-        return null
-    }
+        return ['http:', 'https:', 'mailto:'].includes(url.protocol.toLowerCase()) ? href : null
+    } catch { return null }
 }
+
+// SVG data URLs are intentionally excluded: SVG is an active document format, not a raster image.
+const safeDataImage = /^data:image\/(?:png|apng|gif|jpe?g|webp|avif);base64,[a-z0-9+/]*={0,2}$/i
 
 export function sanitizeImageSrc(rawSrc: string): string | null {
     const src = rawSrc.trim()
-    if (!src || src.startsWith('//')) return null
-    if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) return src
-
+    if (!src || src.startsWith('//') || src.startsWith('?') || src.startsWith('#')) return null
+    if (src.startsWith('/') || /^(?:\.\.?\/)?[^:/?#][^:]*$/u.test(src)) return src
+    if (safeDataImage.test(src)) return src
     try {
         const url = new URL(src)
-        if (url.protocol === 'http:' || url.protocol === 'https:') return src
-        if (url.protocol === 'data:' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(src)) return src
-        return null
-    } catch {
-        return null
-    }
+        return ['http:', 'https:'].includes(url.protocol.toLowerCase()) ? src : null
+    } catch { return null }
 }
 
 export function groupChunksIntoBlocks(chunks: Chunk[]): Chunk[][] {
-    const blocks: Chunk[][] = []
-    let currentBlock: Chunk[] = []
-    let lastBlockType: BlockType | undefined
-    let lastBlockLevel: number | undefined
-    let lastTableId: string | undefined
-    let lastListDepth: number | undefined
-    let lastListType: ListMetadata['type'] | undefined
-    let lastOffset = -1
-
+    const result: Chunk[][] = []
+    let current: Chunk[] = []
     for (const chunk of chunks) {
-        const blockType = chunk.block.type
-        const blockLevel = chunk.block.level
-        const tableId = chunk.block.table?.tableId
-        const listDepth = chunk.block.list?.depth
-        const listType = chunk.block.list?.type
-        let isNewBlock = false
-
-        if (
-            blockType !== lastBlockType
-            && !(isTableCellBlockType(blockType) && isTableCellBlockType(lastBlockType) && tableId === lastTableId)
-        ) {
-            isNewBlock = true
-        } else if (tableId !== lastTableId) {
-            isNewBlock = true
-        } else if (blockType === 'heading' && blockLevel !== lastBlockLevel) {
-            isNewBlock = true
-        } else if (blockType === 'list_item' && (listDepth !== lastListDepth || listType !== lastListType)) {
-            isNewBlock = true
-        } else if (blockType === 'list_item' && lastOffset >= 0) {
-            const previousChunk = currentBlock[currentBlock.length - 1]
-            if (previousChunk?.text.endsWith('\n') && chunk.text.trim().length > 0) {
-                isNewBlock = true
-            }
+        const previous = current.at(-1)
+        const typeChanged = previous && chunk.block.type !== previous.block.type && !(isTableCellBlockType(chunk.block.type) && isTableCellBlockType(previous.block.type) && chunk.block.table?.tableId === previous.block.table?.tableId)
+        const tableChanged = previous && chunk.block.table?.tableId !== previous.block.table?.tableId
+        const headingChanged = previous && chunk.block.type === 'heading' && chunk.block.level !== previous.block.level
+        const listChanged = previous && chunk.block.type === 'list_item' && (chunk.block.list?.depth !== previous.block.list?.depth || chunk.block.list?.type !== previous.block.list?.type)
+        const nextListItem = previous && chunk.block.type === 'list_item' && previous.text.endsWith('\n') && chunk.text.trim().length > 0
+        if ((typeChanged || tableChanged || headingChanged || listChanged || nextListItem) && current.length) {
+            result.push(current)
+            current = []
         }
-
-        if (isNewBlock && currentBlock.length > 0) {
-            blocks.push(currentBlock)
-            currentBlock = []
-        }
-
-        currentBlock.push(chunk)
-        lastBlockType = blockType
-        lastBlockLevel = blockLevel
-        lastTableId = tableId
-        lastListDepth = listDepth
-        lastListType = listType
-        lastOffset = chunk.offset + chunk.length
+        current.push(chunk)
     }
-
-    if (currentBlock.length > 0) blocks.push(currentBlock)
-    return blocks
+    if (current.length) result.push(current)
+    return result
 }
 
 export function buildInlineContent(schema: Schema, blockChunks: Chunk[]): ProseMirrorNode[] {
-    const nodes: ProseMirrorNode[] = []
     const chunks = trimTrailingNewline(blockChunks)
-    const closedSpans = chunks.flatMap(chunk => [...chunk.contained, ...chunk.closing])
-    const imageSpans = dedupeClosedSpans(closedSpans.filter((span): span is ClosedSpan & { type: 'image'; src: string; alt?: string } => span.type === 'image'))
-    const markRanges = buildMarkRanges(chunks, closedSpans)
-    const textRuns = buildTextRuns(chunks, closedSpans, markRanges, imageSpans)
-
-    for (const run of textRuns) {
+    const closed = dedupeClosedSpans(chunks.flatMap(chunk => [...chunk.contained, ...chunk.closing]))
+    const marks = buildMarkRanges(chunks, closed)
+    return buildTextRuns(chunks, closed, marks).flatMap(run => {
         if (run.image) {
             const src = sanitizeImageSrc(run.image.src)
-            if (src) {
-                nodes.push(schema.nodes.image.create({ src, alt: run.image.alt ?? null }))
-                continue
-            }
+            if (src && schema.nodes.image?.isInline) return [schema.nodes.image.create({ src, alt: run.image.alt ?? null })]
         }
-
-        if (!run.text) continue
-        const marks = createMarksForRange(schema, closedSpans, markRanges, run.start, run.end)
-        nodes.push(marks.length > 0 ? schema.text(run.text, marks) : schema.text(run.text))
-    }
-
-    return nodes
+        if (!run.text) return []
+        const active = createMarksForRange(schema, closed, marks, run.start, run.end)
+        return [schema.text(run.text, active)]
+    })
 }
 
+/** Schema-parameterized content builder. Schemas without optional list/table/image nodes degrade to valid paragraphs/text. */
 export function buildContentFromChunks(schema: Schema, chunks: Chunk[]): Fragment {
-    const blocks = groupChunksIntoBlocks(chunks)
     const nodes: ProseMirrorNode[] = []
-    let listFrames: ListFrame[] = []
-
-    function flushLists(toDepth = -1): void {
-        while (listFrames.length > 0 && listFrames[listFrames.length - 1].depth > toDepth) {
-            const frame = listFrames.pop()!
+    const frames: ListFrame[] = []
+    const flush = (minimumDepth = -1) => {
+        while (frames.length && frames.at(-1)!.depth >= minimumDepth) {
+            const frame = frames.pop()!
             const listNode = createListNode(schema, frame)
-            if (listFrames.length > 0) {
-                const parent = listFrames[listFrames.length - 1]
-                const lastItem = parent.items.pop()
-                if (lastItem) {
-                    parent.items.push(appendBlockToListItem(schema, lastItem, listNode))
-                } else {
-                    parent.items.push(schema.nodes.list_item.create(null, listNode))
-                }
-            } else {
-                nodes.push(listNode)
-            }
+            if (!listNode) {
+                nodes.push(...frame.items.map(item => schema.nodes.paragraph.create(null, item.textContent ? schema.text(item.textContent) : null)))
+            } else if (frames.length) {
+                const parent = frames.at(-1)!
+                const item = parent.items.pop()
+                parent.items.push(item ? appendBlockToListItem(schema, item, listNode) : schema.nodes.list_item.create(null, listNode))
+            } else nodes.push(listNode)
         }
     }
-
+    const blocks = groupChunksIntoBlocks(chunks)
     for (let index = 0; index < blocks.length; index++) {
         const block = blocks[index]
-        const firstChunk = block[0]
-        const nextBlock = blocks[index + 1]
-
+        const first = block[0]
         try {
-            if (firstChunk?.block.type === 'list_item' && firstChunk.block.list) {
-                const list = firstChunk.block.list
-                flushLists(list.depth - 1)
-                let frame = listFrames[listFrames.length - 1]
-                if (!frame || frame.depth !== list.depth || frame.type !== list.type) {
-                    frame = {
-                        type: list.type,
-                        depth: list.depth,
-                        order: list.ordinal ?? 1,
-                        items: [],
-                    }
-                    listFrames.push(frame)
-                }
-                frame.items.push(createListItemNode(schema, block, list))
-                if (nextBlock?.[0]?.block.list === undefined) flushLists()
+            if (first?.block.type === 'list_item' && first.block.list) {
+                const list = first.block.list
+                // Keep same-depth siblings; close only descendants. A different list type replaces the frame.
+                while (frames.length && frames.at(-1)!.depth > list.depth) flush(frames.at(-1)!.depth)
+                if (frames.at(-1)?.depth === list.depth && frames.at(-1)?.type !== list.type) flush(list.depth)
+                if (!frames.at(-1) || frames.at(-1)!.depth !== list.depth) frames.push({ type: list.type, depth: list.depth, order: list.ordinal ?? 1, items: [] })
+                frames.at(-1)!.items.push(createListItemNode(schema, block, list))
+                if (!blocks[index + 1]?.[0]?.block.list) flush(0)
                 continue
             }
-
-            flushLists()
-
-            if (isTableCellBlockType(firstChunk?.block.type)) {
+            flush(0)
+            if (isTableCellBlockType(first?.block.type)) {
+                const tableId = first.block.table?.tableId
                 const tableBlocks = [block]
-                const tableId = firstChunk?.block.table?.tableId
-                while (blocks[index + 1]?.[0]?.block.table?.tableId === tableId) {
-                    tableBlocks.push(blocks[++index])
-                }
-                nodes.push(createTableNode(schema, tableBlocks.flat()))
-                continue
-            }
-
-            nodes.push(createBlockNode(schema, block))
-        } catch {
-            flushLists()
-            nodes.push(schema.nodes.paragraph.create(null, createPlainTextContent(schema, block)))
+                while (tableId !== undefined && blocks[index + 1]?.[0]?.block.table?.tableId === tableId) tableBlocks.push(blocks[++index])
+                const table = createTableNode(schema, tableBlocks.flat())
+                nodes.push(table ?? fallbackParagraph(schema, tableBlocks.flat()))
+            } else nodes.push(createBlockNode(schema, block))
+        } catch (error) {
+            console.warn('Unexpected ProseMirror stream assembly failure; using plain-text fallback.', error)
+            flush(0)
+            nodes.push(fallbackParagraph(schema, block))
         }
     }
-
-    flushLists()
-    return nodes.length > 0 ? Fragment.fromArray(nodes) : Fragment.from(schema.nodes.paragraph.create())
+    flush(0)
+    return nodes.length ? Fragment.fromArray(nodes) : Fragment.from(schema.nodes.paragraph.create())
 }
 
 export function buildDocFromChunks(schema: Schema, chunks: Chunk[]): ProseMirrorNode {
-    return schema.nodes.doc.create(null, buildContentFromChunks(schema, chunks))
+    const doc = schema.nodes.doc.createAndFill(null, buildContentFromChunks(schema, chunks))
+    if (!doc) throw new Error('Schema cannot create a valid document from streaming content')
+    doc.check()
+    return doc
 }
 
 function createBlockNode(schema: Schema, block: Chunk[]): ProseMirrorNode {
     const first = block[0]
-    const inlineContent = buildInlineContent(schema, block)
-
-    switch (first?.block.type) {
-        case 'heading':
-            return schema.nodes.heading.create({ level: first.block.level ?? 1 }, inlineContent)
-        case 'code_block':
-            return schema.nodes.code_block.create(
-                { language: first.block.language ?? '' },
-                createTextNodeOrNull(schema, trimTrailingNewline(block).map(chunk => chunk.text).join('')),
-            )
-        case 'blockquote':
-            return schema.nodes.blockquote.create(null, schema.nodes.paragraph.create(null, inlineContent))
-        case 'paragraph':
-        case undefined:
-        default:
-            return schema.nodes.paragraph.create(null, inlineContent)
-    }
+    const inline = buildInlineContent(schema, block)
+    const node = first?.block.type === 'heading' ? schema.nodes.heading?.createAndFill({ level: first.block.level ?? 1 }, inline)
+        : first?.block.type === 'code_block' ? schema.nodes.code_block?.createAndFill({ language: first.block.language ?? '' }, createTextNodeOrNull(schema, trimTrailingNewline(block).map(c => c.text).join('')))
+        : first?.block.type === 'blockquote' ? schema.nodes.blockquote?.createAndFill(null, schema.nodes.paragraph.create(null, inline))
+        : schema.nodes.paragraph.createAndFill(null, inline)
+    return node ?? fallbackParagraph(schema, block)
 }
 
 function createListItemNode(schema: Schema, block: Chunk[], list: ListMetadata): ProseMirrorNode {
-    const paragraph = schema.nodes.paragraph.create(null, buildInlineContent(schema, block))
-    return schema.nodes.list_item.create({ task: list.task ?? null }, paragraph)
+    return schema.nodes.list_item.createAndFill({ task: list.task ?? null }, schema.nodes.paragraph.create(null, buildInlineContent(schema, block))) ?? fallbackParagraph(schema, block)
 }
 
-function createListNode(schema: Schema, frame: ListFrame): ProseMirrorNode {
+function createListNode(schema: Schema, frame: ListFrame): ProseMirrorNode | null {
     const type = frame.type === 'ordered' ? schema.nodes.ordered_list : schema.nodes.bullet_list
-    return frame.type === 'ordered'
-        ? type.create({ order: frame.order }, frame.items)
-        : type.create(null, frame.items)
+    return type?.createAndFill(frame.type === 'ordered' ? { order: frame.order } : null, frame.items) ?? null
 }
 
 function appendBlockToListItem(schema: Schema, item: ProseMirrorNode, block: ProseMirrorNode): ProseMirrorNode {
-    return schema.nodes.list_item.create(item.attrs, item.content.append(Fragment.from(block)))
+    return schema.nodes.list_item.createAndFill(item.attrs, item.content.append(Fragment.from(block))) ?? item
 }
 
-function createTableNode(schema: Schema, chunks: Chunk[]): ProseMirrorNode {
+function createTableNode(schema: Schema, chunks: Chunk[]): ProseMirrorNode | null {
+    if (!schema.nodes.table || !schema.nodes.table_row || !schema.nodes.table_cell || !schema.nodes.table_header_cell) return null
     const rows = buildTableRows(chunks)
+    if (!rows.length || rows.some(row => !row.cells.length)) return null
     const rowNodes = rows.map(row => {
-        const cellNodes = row.cells.map(cell => {
-            const cellType = cell.type === 'table_header_cell'
-                ? schema.nodes.table_header_cell
-                : schema.nodes.table_cell
-            return cellType.create({ align: cell.align ?? null }, buildInlineContent(schema, cell.chunks))
-        })
-        return schema.nodes.table_row.create(null, cellNodes)
+        const cells = row.cells
+            .map(cell => (cell.type === 'table_header_cell' ? schema.nodes.table_header_cell : schema.nodes.table_cell).createAndFill({ align: cell.align ?? null }, buildInlineContent(schema, cell.chunks)))
+            .filter((node): node is ProseMirrorNode => node !== null)
+        return schema.nodes.table_row.createAndFill(null, cells)
     })
-    return schema.nodes.table.create(null, rowNodes)
+    if (rowNodes.some(node => !node)) return null
+    const table = schema.nodes.table.createAndFill(null, rowNodes.filter((node): node is ProseMirrorNode => node !== null))
+    if (table) table.check()
+    return table
 }
 
 function buildTableRows(chunks: Chunk[]): Array<{ rowIndex: number; cells: CellGroup[] }> {
     const rows = new Map<number, Map<string, CellGroup>>()
-
     for (const chunk of chunks) {
-        const table = chunk.block.table
-        if (!table) continue
-
-        let row = rows.get(table.rowIndex)
-        if (!row) {
-            row = new Map<string, CellGroup>()
-            rows.set(table.rowIndex, row)
-        }
-
-        let cell = row.get(table.cellId)
-        if (!cell) {
-            cell = {
-                cellId: table.cellId,
-                columnIndex: table.columnIndex,
-                type: chunk.block.type === 'table_header_cell' ? 'table_header_cell' : 'table_cell',
-                align: table.align,
-                chunks: [],
-            }
-            row.set(table.cellId, cell)
-        }
-
+        const meta = chunk.block.table
+        if (!meta) continue
+        let row = rows.get(meta.rowIndex); if (!row) rows.set(meta.rowIndex, row = new Map())
+        let cell = row.get(meta.cellId)
+        if (!cell) row.set(meta.cellId, cell = { cellId: meta.cellId, columnIndex: meta.columnIndex, type: chunk.block.type === 'table_header_cell' ? 'table_header_cell' : 'table_cell', align: meta.align, chunks: [] })
         cell.chunks.push(chunk)
     }
-
-    return [...rows.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([rowIndex, cells]) => ({
-            rowIndex,
-            cells: [...cells.values()].sort((a, b) => a.columnIndex - b.columnIndex),
-        }))
+    return [...rows].sort(([a], [b]) => a - b).map(([rowIndex, cells]) => ({ rowIndex, cells: [...cells.values()].sort((a, b) => a.columnIndex - b.columnIndex) }))
 }
 
-function buildTextRuns(
-    chunks: Chunk[],
-    spans: ClosedSpan[],
-    markRanges: MarkRange[],
-    imageSpans: Array<ClosedSpan & { type: 'image'; src: string; alt?: string }>,
-): Array<{ start: number; end: number; text: string; image?: Span & { type: 'image' } }> {
-    const runs: Array<{ start: number; end: number; text: string; image?: Span & { type: 'image' } }> = []
-
-    for (const chunk of chunks) {
-        const chunkStart = chunk.offset
-        const chunkEnd = chunk.offset + chunk.length
-        const boundaries = new Set<number>([chunkStart, chunkEnd])
-
-        for (const span of spans) {
-            const spanStart = span.offset
-            const spanEnd = span.offset + span.length
-            if (spanStart > chunkStart && spanStart < chunkEnd) boundaries.add(spanStart)
-            if (spanEnd > chunkStart && spanEnd < chunkEnd) boundaries.add(spanEnd)
-        }
-        for (const range of markRanges) {
-            if (range.start > chunkStart && range.start < chunkEnd) boundaries.add(range.start)
-            if (range.end > chunkStart && range.end < chunkEnd) boundaries.add(range.end)
-        }
-
-        const sortedBoundaries = [...boundaries].sort((a, b) => a - b)
-        for (let index = 0; index < sortedBoundaries.length - 1; index++) {
-            const start = sortedBoundaries[index]
-            const end = sortedBoundaries[index + 1]
-            if (start === end) continue
-            const image = imageSpans.find(span => span.offset === start && span.offset + span.length === end)
-            runs.push({
-                start,
-                end,
-                text: chunk.text.slice(start - chunk.offset, end - chunk.offset),
-                image,
-            })
-        }
+function buildTextRuns(chunks: Chunk[], spans: ClosedSpan[], markRanges: MarkRange[]): TextRun[] {
+    const images = spans.filter((span): span is ClosedSpan & { type: 'image'; src: string; alt?: string } => span.type === 'image' && isFullyCovered(chunks, span.offset, span.offset + span.length))
+    const boundaries = new Set<number>()
+    for (const chunk of chunks) { boundaries.add(chunk.offset); boundaries.add(chunk.offset + chunk.length) }
+    for (const span of spans) { boundaries.add(span.offset); boundaries.add(span.offset + span.length) }
+    for (const range of markRanges) { boundaries.add(range.start); boundaries.add(range.end) }
+    const points = [...boundaries].sort((a, b) => a - b)
+    const runs: TextRun[] = []
+    for (let i = 0; i < points.length - 1;) {
+        const start = points[i], image = images.find(span => span.offset === start)
+        const end = image ? image.offset + image.length : points[i + 1]
+        const text = textForRange(chunks, start, end)
+        runs.push({ start, end, text, image })
+        i = image ? points.findIndex(point => point === end) : i + 1
     }
-
     return runs
 }
 
-function buildMarkRanges(chunks: Chunk[], spans: ClosedSpan[]): MarkRange[] {
-    const ranges: MarkRange[] = []
-    const openSpans: OpenSpan[] = []
-    const blockEnd = chunks.reduce((max, chunk) => Math.max(max, chunk.offset + chunk.length), 0)
-
-    for (const span of spans) {
-        if (span.type === 'link' || span.type === 'image') continue
-        ranges.push({ type: span.type, start: span.offset, end: span.offset + span.length })
-    }
-
-    for (const chunk of chunks) {
-        for (const span of chunk.opening) {
-            if (span.type === 'link' || span.type === 'image') continue
-            openSpans.push(span)
-        }
-
-        for (const span of chunk.closing) {
-            if (span.type === 'link' || span.type === 'image') continue
-            const openIndex = openSpans.findIndex(openSpan =>
-                openSpan.type === span.type && openSpan.openOffset === span.offset
-            )
-            if (openIndex === -1) continue
-
-            ranges.push({
-                type: span.type,
-                start: openSpans[openIndex].openOffset,
-                end: span.offset + span.length,
-            })
-            openSpans.splice(openIndex, 1)
-        }
-    }
-
-    for (const span of openSpans) {
-        if (span.openOffset < blockEnd) {
-            ranges.push({ type: span.type, start: span.openOffset, end: blockEnd })
-        }
-    }
-
-    return ranges
+function textForRange(chunks: Chunk[], start: number, end: number): string {
+    return chunks.map(chunk => {
+        const from = Math.max(start, chunk.offset), to = Math.min(end, chunk.offset + chunk.length)
+        return from < to ? chunk.text.slice(from - chunk.offset, to - chunk.offset) : ''
+    }).join('')
 }
 
-function createMarksForRange(schema: Schema, spans: ClosedSpan[], markRanges: MarkRange[], start: number, end: number): Mark[] {
-    const marks: Mark[] = []
-    const activeTypes = new Set<SpanType>()
+function isFullyCovered(chunks: Chunk[], start: number, end: number): boolean {
+    let cursor = start
+    for (const chunk of [...chunks].sort((a, b) => a.offset - b.offset)) {
+        if (chunk.offset > cursor) return false
+        if (chunk.offset + chunk.length > cursor) cursor = Math.min(end, chunk.offset + chunk.length)
+        if (cursor === end) return true
+    }
+    return false
+}
 
-    for (const span of dedupeClosedSpans(spans)) {
-        if (span.type === 'image') continue
-        if (span.offset >= end || span.offset + span.length <= start) continue
-
-        if (span.type === 'link') {
-            const href = sanitizeLinkHref(span.url)
-            if (href) marks.push(schema.marks.link.create({ href }))
+function buildMarkRanges(chunks: Chunk[], spans: ClosedSpan[]): MarkRange[] {
+    const ranges = spans.filter(span => span.type !== 'link' && span.type !== 'image').map(span => ({ type: span.type, start: span.offset, end: span.offset + span.length }))
+    const open: Array<OpenSpan & { type: MarkRange['type'] }> = [], end = Math.max(0, ...chunks.map(chunk => chunk.offset + chunk.length))
+    for (const chunk of chunks) {
+        for (const span of chunk.opening) if (span.type !== 'link' && span.type !== 'image') open.push(span as OpenSpan & { type: MarkRange['type'] })
+        for (const span of chunk.closing) {
+            if (span.type === 'link' || span.type === 'image') continue
+            const index = open.findIndex(item => item.type === span.type && item.openOffset === span.offset)
+            if (index >= 0) { ranges.push({ type: span.type, start: open[index].openOffset, end: span.offset + span.length }); open.splice(index, 1) }
         }
     }
+    return [...ranges, ...open.filter(span => span.openOffset < end).map(span => ({ type: span.type, start: span.openOffset, end }))]
+}
 
-    for (const range of markRanges) {
-        if (range.type === 'link' || range.type === 'image') continue
-        if (range.start >= end || range.end <= start) continue
-
-        if (activeTypes.has(range.type)) continue
-        activeTypes.add(range.type)
-        const mark = createMarkForSpanType(schema, range.type)
-        if (mark) marks.push(mark)
-    }
-
+function createMarksForRange(schema: Schema, spans: ClosedSpan[], ranges: MarkRange[], start: number, end: number): Mark[] {
+    const marks: Mark[] = []
+    for (const span of spans) if (span.type === 'link' && span.offset < end && span.offset + span.length > start) { const href = sanitizeLinkHref(span.url); if (href && schema.marks.link) marks.push(schema.marks.link.create({ href })) }
+    for (const range of ranges) if (range.start < end && range.end > start) { const mark = createMarkForSpanType(schema, range.type); if (mark && !marks.some(item => item.type === mark.type)) marks.push(mark) }
     return marks
 }
 
 function createMarkForSpanType(schema: Schema, type: SpanType): Mark | null {
-    switch (type) {
-        case 'bold':
-            return schema.marks.strong.create()
-        case 'italic':
-            return schema.marks.em.create()
-        case 'code':
-            return schema.marks.code.create()
-        case 'strikethrough':
-            return schema.marks.strikethrough.create()
-        default:
-            return null
-    }
+    const name = type === 'bold' ? 'strong' : type === 'italic' ? 'em' : type
+    return name === 'code' || name === 'strikethrough' || name === 'strong' || name === 'em' ? schema.marks[name]?.create() ?? null : null
 }
 
-function dedupeClosedSpans<T extends ClosedSpan>(spans: T[]): T[] {
-    const seen = new Set<string>()
-    return spans.filter(span => {
-        const key = `${span.type}:${span.offset}:${span.length}:${'url' in span ? span.url : ''}:${'src' in span ? span.src : ''}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-    })
-}
-
-function trimTrailingNewline(chunks: Chunk[]): Chunk[] {
-    if (chunks.length === 0) return chunks
-    const trimmed = [...chunks]
-    const last = trimmed[trimmed.length - 1]
-    if (!last.text.endsWith('\n')) return trimmed
-
-    trimmed[trimmed.length - 1] = {
-        ...last,
-        text: last.text.slice(0, -1),
-        length: Math.max(0, last.length - 1),
-    }
-    return trimmed
-}
-
-function createTextNodeOrNull(schema: Schema, text: string): ProseMirrorNode | null {
-    return text ? schema.text(text) : null
-}
-
-function createPlainTextContent(schema: Schema, block: Chunk[]): ProseMirrorNode[] {
-    const text = trimTrailingNewline(block).map(chunk => chunk.text).join('')
-    return text ? [schema.text(text)] : []
-}
-
-function isTableCellBlockType(blockType: string | undefined): boolean {
-    return blockType === 'table_header_cell' || blockType === 'table_cell'
-}
+function dedupeClosedSpans<T extends ClosedSpan>(spans: T[]): T[] { const seen = new Set<string>(); return spans.filter(span => { const key = `${span.type}:${span.offset}:${span.length}:${'url' in span ? span.url : ''}:${'src' in span ? span.src : ''}`; if (seen.has(key)) return false; seen.add(key); return true }) }
+function trimTrailingNewline(chunks: Chunk[]): Chunk[] { const copy = [...chunks], last = copy.at(-1); if (!last?.text.endsWith('\n')) return copy; copy[copy.length - 1] = { ...last, text: last.text.slice(0, -1), length: Math.max(0, last.length - 1) }; return copy }
+function createTextNodeOrNull(schema: Schema, text: string): ProseMirrorNode | null { return text ? schema.text(text) : null }
+function fallbackParagraph(schema: Schema, chunks: Chunk[]): ProseMirrorNode { const text = trimTrailingNewline(chunks).map(chunk => chunk.text).join(''); return schema.nodes.paragraph.create(null, text ? schema.text(text) : null) }
+function isTableCellBlockType(type: string | undefined): boolean { return type === 'table_header_cell' || type === 'table_cell' }

@@ -9,7 +9,8 @@ import { applyStreamingChunkToBuffer, buildDocFromChunks } from './stream-assemb
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const repoRoot = join(__dirname, '../../../../..')
-const examplesDir = join(repoRoot, 'demo/svelte-demo/static/llm-streams-examples')
+// Tests must not depend on generated Svelte static output.
+const examplesDir = join(repoRoot, 'demo/llm-streams-examples')
 const wasmDir = join(repoRoot, 'demo/svelte-demo/static')
 
 type ParsedExample = {
