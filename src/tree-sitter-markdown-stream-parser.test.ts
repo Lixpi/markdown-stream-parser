@@ -706,6 +706,174 @@ describe('Tree-Sitter MarkdownStreamParser - Phase 1: Quick Wins', () => {
     })
   })
 
+  describe('Links and Images', () => {
+    it('extracts metadata for complete inline links and images', async () => {
+      parser.parseToken('Read [documentation](https://example.com/docs) and ![project logo](https://example.com/logo.png)\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const closedSpans = getClosedSpans(activeChunks)
+      const link = closedSpans.find((span): span is ClosedSpan & { type: 'link'; url: string } => span.type === 'link')
+      const image = closedSpans.find((span): span is ClosedSpan & { type: 'image'; src: string; alt?: string } => span.type === 'image')
+
+      expect(link).toMatchObject({
+        type: 'link',
+        url: 'https://example.com/docs',
+        offset: 'Read '.length,
+        length: '[documentation](https://example.com/docs)'.length,
+      })
+      expect(image).toMatchObject({
+        type: 'image',
+        src: 'https://example.com/logo.png',
+        alt: 'project logo',
+        offset: 'Read [documentation](https://example.com/docs) and '.length,
+        length: '![project logo](https://example.com/logo.png)'.length,
+      })
+    })
+
+    it('buffers links and images split across streamed tokens until they close', async () => {
+      parser.parseToken('Read [document')
+      parser.parseToken('ation](https://example.com/docs) and ![project ')
+      parser.parseToken('logo](https://example.com/logo.png)\n')
+      parser.stopParsing()
+
+      const activeChunks = applyBacktracks(parsedChunks)
+      const closedSpans = getClosedSpans(activeChunks)
+      const link = closedSpans.find((span): span is ClosedSpan & { type: 'link'; url: string } => span.type === 'link')
+      const image = closedSpans.find((span): span is ClosedSpan & { type: 'image'; src: string; alt?: string } => span.type === 'image')
+
+      expect(activeChunks.map(chunk => chunk.text).join('')).toBe(
+        'Read [documentation](https://example.com/docs) and ![project logo](https://example.com/logo.png)\n'
+      )
+      expect(link).toMatchObject({ type: 'link', url: 'https://example.com/docs' })
+      expect(image).toMatchObject({ type: 'image', src: 'https://example.com/logo.png', alt: 'project logo' })
+    })
+
+    it('flushes truncated links and images as plain text at end of stream', async () => {
+      parser.parseToken('See [docum')
+      parser.stopParsing()
+
+      expect(parsedChunks.map(chunk => chunk.text).join('')).toBe('See [docum')
+      expect(getClosedSpans(parsedChunks)).toHaveLength(0)
+
+      const imageChunks = await parseMarkdownInChunks('truncated-image', 'See ![lo', 2)
+      expect(imageChunks.map(chunk => chunk.text).join('')).toBe('See ![lo')
+      expect(getClosedSpans(imageChunks)).toHaveLength(0)
+    })
+
+    it('does not retain bracket-like text or images without destinations as open syntax', async () => {
+      parser.parseToken('See [citation 1] for details and ![alt] without a destination\n')
+      parser.stopParsing()
+
+      expect(parsedChunks.map(chunk => chunk.text).join('')).toBe(
+        'See [citation 1] for details and ![alt] without a destination\n'
+      )
+      expect(getClosedSpans(parsedChunks)).toHaveLength(0)
+    })
+
+    it('does not emit partial link or image syntax before the closing token arrives', async () => {
+      parser.parseToken('See [docum')
+      expect(parsedChunks.map(chunk => chunk.text).join('')).toBe('See ')
+
+      parser.parseToken('entation](https://example.com/docs) and ![lo')
+      expect(parsedChunks.map(chunk => chunk.text).join('')).toBe('See [documentation](https://example.com/docs) and ')
+
+      parser.parseToken('go](https://example.com/logo.png)\n')
+      parser.stopParsing()
+
+      const closedSpans = getClosedSpans(applyBacktracks(parsedChunks))
+      expect(closedSpans.filter(span => span.type === 'link')).toHaveLength(1)
+      expect(closedSpans.filter(span => span.type === 'image')).toHaveLength(1)
+    })
+
+    it('parses links and images across character-sized tokens without duplicate spans', async () => {
+      const markdown = 'Links: [one](https://example.com/one) [two](https://example.com/two) ![logo](https://example.com/logo.png)\n'
+      const chunks = applyBacktracks(await parseMarkdownInChunks('character-links-images', markdown, 1))
+      const closedSpans = getClosedSpans(chunks)
+
+      expect(chunks.map(chunk => chunk.text).join('')).toBe(markdown)
+      expect(closedSpans.filter(span => span.type === 'link')).toHaveLength(2)
+      expect(closedSpans.filter(span => span.type === 'image')).toHaveLength(1)
+    })
+
+    it('handles splits between link delimiters, inside URLs, and between ! and [', async () => {
+      parser.parseToken('[split]')
+      parser.parseToken('(https://example.')
+      parser.parseToken('com/path) !')
+      parser.parseToken('[logo](https://example.com/logo.png)')
+      parser.parseToken('\n')
+      parser.stopParsing()
+
+      const closedSpans = getClosedSpans(applyBacktracks(parsedChunks))
+      expect(closedSpans).toContainEqual(expect.objectContaining({ type: 'link', url: 'https://example.com/path' }))
+      expect(closedSpans).toContainEqual(expect.objectContaining({ type: 'image', src: 'https://example.com/logo.png', alt: 'logo' }))
+    })
+
+    it('keeps destinations and span placement for adjacent and nested inline syntax', async () => {
+      parser.parseToken('[a](https://example.com/a)[b](https://example.com/b) *see [docs](https://example.com/docs)* [![logo](logo.png)](https://example.com/home)\n')
+      parser.stopParsing()
+
+      const closedSpans = getClosedSpans(applyBacktracks(parsedChunks))
+      const links = closedSpans.filter((span): span is ClosedSpan & { type: 'link'; url: string } => span.type === 'link')
+      const images = closedSpans.filter((span): span is ClosedSpan & { type: 'image'; src: string; alt?: string } => span.type === 'image')
+
+      expect(links.map(link => link.url)).toEqual([
+        'https://example.com/a',
+        'https://example.com/b',
+        'https://example.com/docs',
+        'https://example.com/home',
+      ])
+      expect(links[1].offset).toBe('[a](https://example.com/a)'.length)
+      expect(images).toHaveLength(1)
+      expect(images[0]).toMatchObject({ src: 'logo.png', alt: 'logo' })
+      expect(closedSpans.some(span => span.type === 'italic')).toBe(true)
+    })
+
+    it('extracts empty, titled, and angle-bracket destinations while pinning parenthesized URLs', async () => {
+      const examples = await Promise.all([
+        parseMarkdownInChunks('empty-link-text', '[](https://example.com)', 100),
+        parseMarkdownInChunks('empty-link-url', '[text]()', 100),
+        parseMarkdownInChunks('empty-image-alt', '![](image.png)', 100),
+        parseMarkdownInChunks('link-title', '[title](https://example.com "A title")', 100),
+        parseMarkdownInChunks('parenthesized-link-url', '[wiki](https://en.wikipedia.org/wiki/Foo_(bar))', 100),
+        parseMarkdownInChunks('angle-link-url', '[space](<https://example.com/a%20b>)', 100),
+      ])
+      const closed = examples.map(chunks => getClosedSpans(applyBacktracks(chunks)))
+
+      expect(closed[0]).toContainEqual(expect.objectContaining({ type: 'link', url: 'https://example.com' }))
+      expect(closed[1]).toContainEqual(expect.objectContaining({ type: 'link', url: '' }))
+      expect(closed[2]).toContainEqual(expect.objectContaining({ type: 'image', src: 'image.png' }))
+      expect(closed[3]).toContainEqual(expect.objectContaining({ type: 'link', url: 'https://example.com' }))
+      // The current streaming parser leaves parenthesized destinations as text.
+      expect(closed[4]).toHaveLength(0)
+      expect(examples[4].map(chunk => chunk.text).join('')).toBe('[wiki](https://en.wikipedia.org/wiki/Foo_(bar))')
+      expect(closed[5]).toContainEqual(expect.objectContaining({ type: 'link', url: '<https://example.com/a%20b>' }))
+    })
+
+    it('leaves escaped, reference, and autolink syntax without inline link spans', async () => {
+      parser.parseToken('\\[not a link\\] [reference][ref] <https://example.com>\n')
+      parser.stopParsing()
+
+      expect(parsedChunks.map(chunk => chunk.text).join('')).toBe('\\[not a link\\] [reference][ref] <https://example.com>\n')
+      expect(getClosedSpans(parsedChunks).filter(span => span.type === 'link')).toHaveLength(0)
+    })
+
+    it('extracts links in headings, list items, blockquotes, and table cells', async () => {
+      parser.parseToken('## [heading](https://example.com/heading)\n- [item](https://example.com/item)\n> [quote](https://example.com/quote)\n\n| [cell](https://example.com/cell) |\n| --- |\n')
+      parser.stopParsing()
+
+      const links = getClosedSpans(applyBacktracks(parsedChunks))
+        .filter((span): span is ClosedSpan & { type: 'link'; url: string } => span.type === 'link')
+
+      expect(links.map(link => link.url)).toEqual([
+        'https://example.com/heading',
+        'https://example.com/item',
+        'https://example.com/quote',
+        'https://example.com/cell',
+      ])
+    })
+  })
+
   describe('Split Inline Code', () => {
     it('should buffer split inline code delimiters across chunks', async () => {
       parser.parseToken('Run `npm')
