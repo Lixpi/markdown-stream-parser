@@ -413,6 +413,38 @@ flowchart LR
 
 Tree-sitter changed ranges and syntax errors identify source positions that may invalidate emitted output. Recovery selects a stored checkpoint, reconstructs generator state, and replays source from that checkpoint. Public offsets remain in rendered UTF-16 coordinates even though recovery decisions use raw source positions internally.
 
+## ProseMirror Demo Integration
+
+The Svelte demo renders streaming chunks with a read-only ProseMirror `EditorView`. Its framework-free assembly layer lives in `demo/svelte-demo/src/lib/prosemirror/` and accepts a ProseMirror schema plus `Chunk[]`, so the projection logic can be reused with compatible schemas.
+
+The demo keeps a chunk buffer. For each `STREAMING` event, it removes buffered chunks whose rendered range crosses `backtrackOffset`, appends the replacement chunk, rebuilds the document, and replaces the editor content. `START_STREAM` and reset clear the buffer. A bounded recovery emits a console warning with the parser's recovery metadata.
+
+The demo schema represents paragraphs, headings, code blocks, blockquotes, ordered and unordered lists, task items, tables, inline images, and the `strong`, `em`, `code`, `strikethrough`, and `link` marks. List assembly preserves same-depth siblings, nested siblings, ordered-list start values, and the parent list when returning from a nested list. Table cells are grouped by the parser's table, row, and cell identifiers.
+
+Inline spans use rendered offsets across the entire block. Closed image spans replace their covered text with one image node even when the span crosses chunk boundaries; open image spans remain text until metadata arrives. The assembler validates completed documents and falls back to plain paragraphs for incomplete or unsupported structures. Unexpected assembly failures are logged before that fallback is used.
+
+### URL Policy in the Demo
+
+Link marks accept absolute `http:`, `https:`, and `mailto:` URLs. Image nodes accept absolute `http:` and `https:` URLs, root-relative and path-relative paths, and base64-encoded PNG, APNG, GIF, JPEG, WebP, and AVIF data URLs. Protocol-relative URLs, query- and fragment-only sources, scriptable schemes, non-image data URLs, malformed values, and SVG data URLs render as ordinary text.
+
+## Demo Verification
+
+The demo unit and integration tests run through the container:
+
+```bash
+docker exec -it lixpi-markdown-stream-parser-demo \
+    pnpm --dir demo/svelte-demo run test
+```
+
+The integration tests read the tracked JSON fixtures in `demo/llm-streams-examples`; development commands copy those fixtures into the demo's static directory for the example picker.
+
+Type-check the demo with:
+
+```bash
+docker exec -it lixpi-markdown-stream-parser-demo \
+    pnpm --dir demo/svelte-demo run check
+```
+
 ## Development
 
 The repository's Docker service installs the root and demo dependencies. Start it from the repository root:
