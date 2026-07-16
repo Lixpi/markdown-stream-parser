@@ -65,6 +65,22 @@ function hasMark(doc: ParsedExample['doc'], type: string): boolean {
     return found
 }
 
+function nodeAttrs(doc: ParsedExample['doc'], type: string): Record<string, unknown>[] {
+    const attrs: Record<string, unknown>[] = []
+    doc.descendants(node => {
+        if (node.type.name === type) attrs.push(node.attrs)
+    })
+    return attrs
+}
+
+function markAttrs(doc: ParsedExample['doc'], type: string): Record<string, unknown>[] {
+    const attrs: Record<string, unknown>[] = []
+    doc.descendants(node => {
+        for (const mark of node.marks) if (mark.type.name === type) attrs.push(mark.attrs)
+    })
+    return attrs
+}
+
 function taskAttrs(doc: ParsedExample['doc']): unknown[] {
     const attrs: unknown[] = []
     doc.descendants(node => {
@@ -130,15 +146,28 @@ describe('real stream examples to ProseMirror documents', () => {
         expect(taskAttrs(taskDoc)).toEqual([{ checked: true }, { checked: false }])
     })
 
+    it('renders streamed link marks and image nodes with their parsed metadata', async () => {
+        const parsed = await parseExample('test-links-images')
+        const links = markAttrs(parsed.doc, 'link')
+        const images = nodeAttrs(parsed.doc, 'image')
+
+        expect(links.some(link => link.href === 'https://example.com/docs')).toBe(true)
+        expect(images).toContainEqual(expect.objectContaining({ src: 'https://example.com/logo.png', alt: 'Project logo' }))
+        expect(parsed.doc.textContent).toContain('Read')
+    })
+
     it('supports reset, replay after completion, and switching examples at the buffer level', async () => {
         const partial = await parseExample('gpt-4.5-cat-coding', 5)
         const replayA = await parseExample('test-strikethrough')
         const replayB = await parseExample('test-strikethrough')
         const switched = await parseExample('test-error-recovery', 3)
+        const linksA = await parseExample('test-links-images')
+        const linksB = await parseExample('test-links-images')
 
         expect(partial.activeChunks.length).toBeGreaterThan(0)
         expect(buildDocFromChunks(schema, []).textContent).toBe('')
         expect(replayA.doc.eq(replayB.doc)).toBe(true)
+        expect(linksA.doc.eq(linksB.doc)).toBe(true)
         expect(switched.doc.textContent).not.toBe(partial.doc.textContent)
     })
 })

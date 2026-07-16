@@ -142,11 +142,13 @@ function detectSpanType(nodeType: string): SpanType | null {
 // Extract span metadata (URL for links, src/alt for images)
 function extractSpanMetadata(node: Node): { url?: string; src?: string; alt?: string } {
     if (node.type === 'inline_link') {
-        const destNode = node.descendantsOfType('link_destination')[0]
+        // Nested images also contain a link_destination. Use the link's own
+        // destination rather than the first descendant in document order.
+        const destNode = node.children.find(child => child.type === 'link_destination')
         return { url: destNode?.text ?? '' }
     }
     if (node.type === 'image') {
-        const destNode = node.descendantsOfType('link_destination')[0]
+        const destNode = node.children.find(child => child.type === 'link_destination')
         const descNode = node.descendantsOfType('image_description')[0]
         return {
             src: destNode?.text ?? '',
@@ -445,7 +447,7 @@ export function generateSegments(
             }
 
             // Check for incomplete image opening ![
-            if (newPortion.includes('![')) {
+            if (newPortion.includes('![') || newPortion.endsWith('!')) {
                 const hasCompleteImage = hasCompleteImageAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
                 if (!hasCompleteImage && hasIncompleteImageOpening(newPortion, inlineParser)) {
                     state.pendingInlineContent = newContent

@@ -175,7 +175,7 @@ type RecoveryInfo = {
 }
 ```
 
-`text` contains rendered text with recognized Markdown syntax removed. `offset`, `length`, span positions, and `backtrackOffset` use UTF-16 code units in the rendered output coordinate space. This matches JavaScript string indexing and `String.prototype.slice()`.
+`text` removes structural markers and emphasis-style delimiters. Link and image source remains in `text`; their spans identify the covered range so a consumer can apply a link mark or replace an image with a node. `offset`, `length`, span positions, and `backtrackOffset` use UTF-16 code units in the rendered output coordinate space. This matches JavaScript string indexing and `String.prototype.slice()`.
 
 `block` describes the surrounding block:
 
@@ -284,7 +284,7 @@ function updateSpanState(chunk: Chunk): void {
 }
 ```
 
-Links include their URL when closed. Images include `src` and may include `alt`.
+Inline links (`[text](url)`) emit a closed `link` span with `url`. Inline images (`![alt](url)`) emit a closed `image` span with `src` and, when present, `alt`. The parser buffers an incomplete link or image until it closes; if the stream ends first, it emits the buffered source as ordinary text.
 
 ## Error Recovery
 
@@ -341,9 +341,8 @@ The parser handles these structures in its exercised parsing paths:
 - Nested and loose list items
 - Task list items with checked and unchecked state
 - Bold, italic, bold-italic, strikethrough, and inline code spans
+- Inline links and images with closed-span URL, source, and alt-text metadata
 - Pipe tables with header-cell detection, delimiter suppression, alignment metadata, and stable per-cell grouping keys for covered table forms
-
-Link and image span extraction is implemented, including URL and image metadata, but dedicated coverage is still needed for those paths.
 
 ### Lists
 
@@ -361,10 +360,11 @@ These structures are incomplete or unsupported:
 - Footnotes
 - HTML blocks
 - Autolinks
+- Reference links and images
 - Emoji shortcodes
 - Superscript and subscript extensions
 
-Escaped inline markers pass through the delimiter logic, but escaping behavior does not yet have complete feature coverage.
+Escaped inline markers pass through the delimiter logic, but escaping behavior does not yet have complete feature coverage. Link destinations containing nested parentheses, such as `https://en.wikipedia.org/wiki/Foo_(bar)`, are emitted as ordinary text rather than link spans.
 
 ## Limitations
 

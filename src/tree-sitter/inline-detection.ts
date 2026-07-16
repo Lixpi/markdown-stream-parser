@@ -1,10 +1,19 @@
 import type { Parser, Tree, Node } from 'web-tree-sitter'
 import { findActiveNodeAtPosition, findInlineNodeAtPosition } from './tree-navigation.ts'
 
+function hasLinkDestination(node: Node): boolean {
+    // tree-sitter omits link_destination for a valid empty destination: [text]().
+    return node.descendantsOfType('link_destination').length > 0 || /\]\(\)$/.test(node.text)
+}
+
 // Check if there's a complete inline_link that overlaps with the given range.
 export function hasCompleteLinkAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const linkNodes = inlineRoot.descendantsOfType('inline_link')
     for (const link of linkNodes) {
+        if (!hasLinkDestination(link)) {
+            continue
+        }
+
         // Check if this link overlaps with our range
         if (link.startIndex <= startPos && link.endIndex >= endPos) {
             return true
@@ -21,6 +30,12 @@ export function hasCompleteLinkAt(inlineRoot: Node, startPos: number, endPos: nu
 export function hasCompleteImageAt(inlineRoot: Node, startPos: number, endPos: number): boolean {
     const imageNodes = inlineRoot.descendantsOfType('image')
     for (const img of imageNodes) {
+        // An image description alone (for example, `![alt]` while streaming)
+        // is not a complete inline image yet. Wait for its destination.
+        if (img.descendantsOfType('link_destination').length === 0) {
+            continue
+        }
+
         // Check if this image overlaps with our range
         if (img.startIndex <= startPos && img.endIndex >= endPos) {
             return true
@@ -47,7 +62,9 @@ export function hasIncompleteLinkOpening(text: string, inlineParser: Parser | nu
     // Tree-sitter parses incomplete link structures.
     // Look for link_text nodes that aren't part of a complete inline_link
     const linkTexts = inlineTree.rootNode.descendantsOfType('link_text')
-    const completeLinks = inlineTree.rootNode.descendantsOfType('inline_link')
+    const completeLinks = inlineTree.rootNode
+        .descendantsOfType('inline_link')
+        .filter(hasLinkDestination)
     const completeImages = inlineTree.rootNode.descendantsOfType('image')
 
     for (const linkText of linkTexts) {
@@ -88,10 +105,23 @@ export function hasIncompleteImageOpening(text: string, inlineParser: Parser | n
         return false
     }
 
+    // Tree-sitter does not produce an image_description until the closing `]`
+    // arrives, so detect an unterminated `![` prefix before inspecting the tree.
+    if (text.endsWith('!')) {
+        return true
+    }
+
+    const imageStart = text.lastIndexOf('![')
+    if (imageStart !== -1 && text.indexOf(']', imageStart + 2) === -1) {
+        return true
+    }
+
     // Tree-sitter parses incomplete image structures.
     // Look for image_description nodes that aren't part of a complete image
     const imageDescs = inlineTree.rootNode.descendantsOfType('image_description')
-    const completeImages = inlineTree.rootNode.descendantsOfType('image')
+    const completeImages = inlineTree.rootNode
+        .descendantsOfType('image')
+        .filter(img => img.descendantsOfType('link_destination').length > 0)
 
     for (const desc of imageDescs) {
         let isPartOfComplete = false
