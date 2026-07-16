@@ -379,79 +379,80 @@ export function generateSegments(
     if (inlineNode && inlineParser) {
         const inlineContent = inlineNode.text
         const inlineTree = inlineParser.parse(inlineContent)
+        if (inlineTree) {
+            // Count the range in the new portion
+            const newPortionStart = actualFromIndex - inlineNode.startIndex
+            const newPortionEnd = actualToIndex - inlineNode.startIndex
+            const newPortion = inlineContent.substring(Math.max(0, newPortionStart), newPortionEnd)
 
-        // Count the range in the new portion
-        const newPortionStart = actualFromIndex - inlineNode.startIndex
-        const newPortionEnd = actualToIndex - inlineNode.startIndex
-        const newPortion = inlineContent.substring(Math.max(0, newPortionStart), newPortionEnd)
-
-        // Check for unmatched backtick
-        if (newPortion.includes('`')) {
-            const hasCompleteCodeSpan = hasCompleteCodeSpanAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-            if (!hasCompleteCodeSpan) {
-                state.pendingInlineContent = newContent
-                state.pendingInlineStartIndex = actualFromIndex
-                state.sourceOffset = actualToIndex
-                return { segments, state }
-            }
-        }
-
-        // Check for unmatched bold markers
-        if (newPortion.includes('**')) {
-            const hasCompleteBold = hasCompleteBoldAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-            if (!hasCompleteBold) {
-                state.pendingInlineContent = newContent
-                state.pendingInlineStartIndex = actualFromIndex
-                state.sourceOffset = actualToIndex
-                return { segments, state }
-            }
-        }
-
-        // Check for unmatched italic markers (skip if inside code block)
-        const insideCodeBlock = isInsideCodeBlock(currentTree.rootNode, actualFromIndex, currentTree, inlineParser)
-        if (!insideCodeBlock) {
-            const hasUnmatchedItalic = hasUnmatchedItalicMarker(newPortion, inlineParser)
-            if (hasUnmatchedItalic) {
-                const hasCompleteItalic = hasCompleteItalicAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-                if (!hasCompleteItalic) {
+            // Check for unmatched backtick
+            if (newPortion.includes('`')) {
+                const hasCompleteCodeSpan = hasCompleteCodeSpanAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                if (!hasCompleteCodeSpan) {
                     state.pendingInlineContent = newContent
                     state.pendingInlineStartIndex = actualFromIndex
                     state.sourceOffset = actualToIndex
                     return { segments, state }
                 }
             }
-        }
 
-        // Check for unmatched strikethrough markers
-        if (newPortion.includes('~~')) {
-            const hasCompleteStrikethrough = hasCompleteStrikethroughAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-            if (!hasCompleteStrikethrough) {
-                state.pendingInlineContent = newContent
-                state.pendingInlineStartIndex = actualFromIndex
-                state.sourceOffset = actualToIndex
-                return { segments, state }
+            // Check for unmatched bold markers
+            if (newPortion.includes('**')) {
+                const hasCompleteBold = hasCompleteBoldAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                if (!hasCompleteBold) {
+                    state.pendingInlineContent = newContent
+                    state.pendingInlineStartIndex = actualFromIndex
+                    state.sourceOffset = actualToIndex
+                    return { segments, state }
+                }
             }
-        }
 
-        // Check for incomplete link opening [
-        if (newPortion.includes('[')) {
-            const hasCompleteLink = hasCompleteLinkAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-            if (!hasCompleteLink && hasIncompleteLinkOpening(newPortion, inlineParser)) {
-                state.pendingInlineContent = newContent
-                state.pendingInlineStartIndex = actualFromIndex
-                state.sourceOffset = actualToIndex
-                return { segments, state }
+            // Check for unmatched italic markers (skip if inside code block)
+            const insideCodeBlock = isInsideCodeBlock(currentTree.rootNode, actualFromIndex, currentTree, inlineParser)
+            if (!insideCodeBlock) {
+                const hasUnmatchedItalic = hasUnmatchedItalicMarker(newPortion, inlineParser)
+                if (hasUnmatchedItalic) {
+                    const hasCompleteItalic = hasCompleteItalicAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                    if (!hasCompleteItalic) {
+                        state.pendingInlineContent = newContent
+                        state.pendingInlineStartIndex = actualFromIndex
+                        state.sourceOffset = actualToIndex
+                        return { segments, state }
+                    }
+                }
             }
-        }
 
-        // Check for incomplete image opening ![
-        if (newPortion.includes('![')) {
-            const hasCompleteImage = hasCompleteImageAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
-            if (!hasCompleteImage && hasIncompleteImageOpening(newPortion, inlineParser)) {
-                state.pendingInlineContent = newContent
-                state.pendingInlineStartIndex = actualFromIndex
-                state.sourceOffset = actualToIndex
-                return { segments, state }
+            // Check for unmatched strikethrough markers
+            if (newPortion.includes('~~')) {
+                const hasCompleteStrikethrough = hasCompleteStrikethroughAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                if (!hasCompleteStrikethrough) {
+                    state.pendingInlineContent = newContent
+                    state.pendingInlineStartIndex = actualFromIndex
+                    state.sourceOffset = actualToIndex
+                    return { segments, state }
+                }
+            }
+
+            // Check for incomplete link opening [
+            if (newPortion.includes('[')) {
+                const hasCompleteLink = hasCompleteLinkAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                if (!hasCompleteLink && hasIncompleteLinkOpening(newPortion, inlineParser)) {
+                    state.pendingInlineContent = newContent
+                    state.pendingInlineStartIndex = actualFromIndex
+                    state.sourceOffset = actualToIndex
+                    return { segments, state }
+                }
+            }
+
+            // Check for incomplete image opening ![
+            if (newPortion.includes('![')) {
+                const hasCompleteImage = hasCompleteImageAt(inlineTree.rootNode, newPortionStart, newPortionEnd)
+                if (!hasCompleteImage && hasIncompleteImageOpening(newPortion, inlineParser)) {
+                    state.pendingInlineContent = newContent
+                    state.pendingInlineStartIndex = actualFromIndex
+                    state.sourceOffset = actualToIndex
+                    return { segments, state }
+                }
             }
         }
     }
@@ -641,40 +642,42 @@ export function generateSegments(
         usedInlineContent = hostInlineNode !== null
         const inlineContent = hostInlineNode?.text ?? processedContent
         const inlineTree = inlineParser.parse(inlineContent)
-        const delimiterRanges = collectInlineDelimiterRanges(inlineTree)
-        const chunkStartInInline = hostInlineNode
-            ? Math.max(0, actualFromIndex - hostInlineNode.startIndex)
-            : 0
-        const chunkEndInInline = hostInlineNode
-            ? Math.max(chunkStartInInline, actualToIndex - hostInlineNode.startIndex)
-            : processedContent.length
+        if (inlineTree) {
+            const delimiterRanges = collectInlineDelimiterRanges(inlineTree)
+            const chunkStartInInline = hostInlineNode
+                ? Math.max(0, actualFromIndex - hostInlineNode.startIndex)
+                : 0
+            const chunkEndInInline = hostInlineNode
+                ? Math.max(chunkStartInInline, actualToIndex - hostInlineNode.startIndex)
+                : processedContent.length
 
-        const spanResult = processInlineSpans(
-            inlineTree,
-            chunkStartInInline,
-            chunkEndInInline,
-            inlineContent,
-            state,
-            delimiterRanges,
-            chunkStartUtf16 - rawToRenderedOffset(chunkStartInInline, delimiterRanges)
-        )
-        opening = spanResult.opening
-        closing = spanResult.closing
-        contained = spanResult.contained
-        state = { ...state, openSpans: spanResult.newOpenSpans }
+            const spanResult = processInlineSpans(
+                inlineTree,
+                chunkStartInInline,
+                chunkEndInInline,
+                inlineContent,
+                state,
+                delimiterRanges,
+                chunkStartUtf16 - rawToRenderedOffset(chunkStartInInline, delimiterRanges)
+            )
+            opening = spanResult.opening
+            closing = spanResult.closing
+            contained = spanResult.contained
+            state = { ...state, openSpans: spanResult.newOpenSpans }
 
-        // Strip inline markers from the content
-        strippedContent = getInlineContent(
-            hostInlineNode ? inlineContent.substring(chunkStartInInline, chunkEndInInline) : processedContent,
-            inlineTree,
-            chunkStartInInline,
-            chunkEndInInline
-        )
+            // Strip inline markers from the content
+            strippedContent = getInlineContent(
+                hostInlineNode ? inlineContent.substring(chunkStartInInline, chunkEndInInline) : processedContent,
+                inlineTree,
+                chunkStartInInline,
+                chunkEndInInline
+            )
 
-        if (hostInlineNode && blockInfo.type !== 'header' && actualToIndex > hostInlineNode.endIndex) {
-            const tailStart = Math.max(actualFromIndex, hostInlineNode.endIndex)
-            const tailText = content.substring(tailStart, actualToIndex)
-            strippedContent += stripListSuppressedRanges(tailText, currentTree.rootNode, content, tailStart, actualToIndex)
+            if (hostInlineNode && blockInfo.type !== 'header' && actualToIndex > hostInlineNode.endIndex) {
+                const tailStart = Math.max(actualFromIndex, hostInlineNode.endIndex)
+                const tailText = content.substring(tailStart, actualToIndex)
+                strippedContent += stripListSuppressedRanges(tailText, currentTree.rootNode, content, tailStart, actualToIndex)
+            }
         }
     }
 

@@ -263,6 +263,9 @@ export function isInsideCodeBlock(
         if (inlineNode) {
             const inlineContent = inlineNode.text
             const inlineTree = inlineParser.parse(inlineContent)
+            if (!inlineTree) {
+                return false
+            }
             const relativePos = position - inlineNode.startIndex
 
             // Check if position is inside any code_span

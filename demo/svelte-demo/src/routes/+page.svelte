@@ -1,27 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import ProseMirrorRenderer from "$lib/prosemirror/ProseMirrorRenderer.svelte";
+  import { isChunkBeforeBacktrack } from "$lib/prosemirror/stream-assembly.ts";
   import {
     MarkdownStreamParser,
     type StreamingChunk,
-    type Chunk,
-    type OpenSpan,
-    type ClosedSpan,
-    type SpanType,
   } from "../../../../src/markdown-stream-parser.ts";
 
   type ExampleFile = { base: string; json: string; txt: string };
-  type TableAlign = "left" | "center" | "right" | undefined;
-  type TableCellGroup = {
-    cellId: string;
-    columnIndex: number;
-    type: "table_header_cell" | "table_cell";
-    align: TableAlign;
-    chunks: Chunk[];
-  };
-  type TableRowGroup = {
-    rowIndex: number;
-    cells: TableCellGroup[];
-  };
 
   MarkdownStreamParser.configureWasmPath("/tree-sitter-markdown.wasm");
 
@@ -34,7 +20,6 @@
   let txtContent = "";
   let jsonContent = "";
   let parsedSegments: StreamingChunk[] = [];
-  let parsedBlocks: Chunk[][] = [];
   let currentToken = "";
   let currentParsedChunks: StreamingChunk[] = [];
   let error = "";
@@ -43,9 +28,7 @@
   let parserInitialized = false;
   let parser: MarkdownStreamParser | null = null;
   let parserId: string = "";
-
-  // Track open spans across chunks for styling
-  let openSpans: OpenSpan[] = [];
+  let pmRenderer: ProseMirrorRenderer | null = null;
 
   async function loadExamples() {
     try {
@@ -77,54 +60,12 @@
     resetParser();
   }
 
-  // Get active span types from open spans and chunk spans
-  function getActiveSpanTypes(chunk: Chunk): SpanType[] {
-    const types: SpanType[] = [];
-
-    // Add types from contained spans (fully within this chunk)
-    for (const span of chunk.contained) {
-      if (!types.includes(span.type)) {
-        types.push(span.type);
-      }
-    }
-
-    // Add types from opening spans (start in this chunk)
-    for (const span of chunk.opening) {
-      if (!types.includes(span.type)) {
-        types.push(span.type);
-      }
-    }
-
-    // Add types from currently open spans (opened in previous chunks)
-    for (const span of openSpans) {
-      if (!types.includes(span.type)) {
-        types.push(span.type);
-      }
-    }
-
-    return types;
-  }
-
-  // Update open spans tracking based on chunk
-  function updateOpenSpans(chunk: Chunk) {
-    // Remove closed spans
-    for (const closedSpan of chunk.closing) {
-      openSpans = openSpans.filter((s) => s.type !== closedSpan.type);
-    }
-
-    // Add new opening spans
-    for (const openSpan of chunk.opening) {
-      openSpans = [...openSpans, openSpan];
-    }
-  }
-
   async function initializeParser() {
     parsedSegments = [];
     currentToken = "";
     currentParsedChunks = [];
     currentTokenIndex = null;
     error = "";
-    openSpans = [];
 
     parserId = "demo-" + Date.now();
 
@@ -136,6 +77,7 @@
         (parsed: StreamingChunk, unsubscribe: () => void) => {
           if (parsed.status === "END_STREAM") {
             parsedSegments = [...parsedSegments, parsed];
+            pmRenderer?.handleStreamingChunk(parsed);
             unsubscribe();
             MarkdownStreamParser.removeInstance(parserId);
             streaming = false;
@@ -143,14 +85,11 @@
             currentTokenIndex = null;
             currentToken = "";
             parser = null;
-            openSpans = [];
           } else if (parsed.status === "START_STREAM") {
             parsedSegments = [...parsedSegments, parsed];
+            pmRenderer?.handleStreamingChunk(parsed);
           } else if (parsed.status === "STREAMING") {
             const chunk = parsed.chunk;
-
-
-
 
             if (chunk.backtrackOffset !== undefined) {
               console.warn("⚠️ BACKTRACK detected!", {
@@ -162,8 +101,7 @@
                   .filter(
                     (seg) =>
                       seg.status === "STREAMING" &&
-                      seg.chunk.offset + seg.chunk.length >
-                        chunk.backtrackOffset!,
+                      !isChunkBeforeBacktrack(seg.chunk, chunk.backtrackOffset!),
                   )
                   .map((seg) =>
                     seg.status === "STREAMING" ? seg.chunk.text : null,
@@ -179,16 +117,12 @@
 
               parsedSegments = parsedSegments.filter((seg) => {
                 if (seg.status !== "STREAMING") return true;
-                return (
-                  seg.chunk.offset + seg.chunk.length <= chunk.backtrackOffset!
-                );
+                return isChunkBeforeBacktrack(seg.chunk, chunk.backtrackOffset!);
               });
-
-              openSpans = [];
             }
 
             parsedSegments = [...parsedSegments, parsed];
-            updateOpenSpans(parsed.chunk);
+            pmRenderer?.handleStreamingChunk(parsed);
 
             if (streaming || paused) {
               currentParsedChunks = [...currentParsedChunks, parsed];
@@ -307,138 +241,14 @@
     }
 
     parsedSegments = [];
-    parsedBlocks = [];
     currentToken = "";
     currentParsedChunks = [];
     currentTokenIndex = null;
     streaming = false;
     paused = false;
     error = "";
-    openSpans = [];
+    pmRenderer?.reset();
   }
-
-  function getTableAlignClass(align: TableAlign): string {
-    if (align === "center") return "text-center";
-    if (align === "right") return "text-right";
-    return "text-left";
-  }
-
-  function getTableCellAlignClass(cell: TableCellGroup): string {
-    if (cell.align) {
-      return getTableAlignClass(cell.align);
-    }
-
-    return cell.type === "table_header_cell" ? "text-center" : "text-left";
-  }
-
-  function buildTableRows(block: Chunk[]): TableRowGroup[] {
-    const rows = new Map<number, Map<string, TableCellGroup>>();
-
-    for (const chunk of block) {
-      const table = chunk.block.table;
-      if (!table) continue;
-
-      let row = rows.get(table.rowIndex);
-      if (!row) {
-        row = new Map<string, TableCellGroup>();
-        rows.set(table.rowIndex, row);
-      }
-
-      let cell = row.get(table.cellId);
-      if (!cell) {
-        cell = {
-          cellId: table.cellId,
-          columnIndex: table.columnIndex,
-          type:
-            chunk.block.type === "table_header_cell"
-              ? "table_header_cell"
-              : "table_cell",
-          align: table.align,
-          chunks: [],
-        };
-        row.set(table.cellId, cell);
-      }
-
-      cell.chunks = [...cell.chunks, chunk];
-    }
-
-    return [...rows.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([rowIndex, cells]) => ({
-        rowIndex,
-        cells: [...cells.values()].sort(
-          (a, b) => a.columnIndex - b.columnIndex,
-        ),
-      }));
-  }
-
-  function isTableCellBlockType(blockType: string | undefined): boolean {
-    return (
-      blockType === "table_header_cell" || blockType === "table_cell"
-    );
-  }
-
-  // Group chunks into blocks based on block type changes
-  $: parsedBlocks = (() => {
-    const blocks: Chunk[][] = [];
-    let currentBlock: Chunk[] = [];
-    let lastBlockType: string | undefined = undefined;
-    let lastBlockLevel: number | undefined = undefined;
-    let lastTableId: string | undefined = undefined;
-    let lastOffset: number = -1;
-
-    for (const seg of parsedSegments) {
-      if (seg.status === "START_STREAM" || seg.status === "END_STREAM") {
-        continue;
-      }
-
-      const chunk = seg.chunk;
-      const blockType = chunk.block.type;
-      const blockLevel = chunk.block.level;
-      const tableId = chunk.block.table?.tableId;
-
-      // Detect new block: type change, or heading level change
-      // For list items, use gap in offset to detect new item
-      let isNewBlock = false;
-
-      if (
-        blockType !== lastBlockType &&
-        !(
-          isTableCellBlockType(blockType) &&
-          isTableCellBlockType(lastBlockType) &&
-          tableId === lastTableId
-        )
-      ) {
-        isNewBlock = true;
-      } else if (tableId !== lastTableId) {
-        isNewBlock = true;
-      } else if (blockType === "heading" && blockLevel !== lastBlockLevel) {
-        isNewBlock = true;
-      } else if (blockType === "list_item" && lastOffset >= 0) {
-        const previousChunk = currentBlock[currentBlock.length - 1];
-        if (previousChunk?.text.endsWith("\n") && chunk.text.trim().length > 0) {
-          isNewBlock = true;
-        }
-      }
-
-      if (isNewBlock && currentBlock.length > 0) {
-        blocks.push(currentBlock);
-        currentBlock = [];
-      }
-
-      currentBlock.push(chunk);
-      lastBlockType = blockType;
-      lastBlockLevel = blockLevel;
-      lastTableId = tableId;
-      lastOffset = chunk.offset + chunk.length;
-    }
-
-    if (currentBlock.length > 0) {
-      blocks.push(currentBlock);
-    }
-
-    return blocks;
-  })();
 
   onMount(async () => {
     try {
@@ -475,30 +285,6 @@
     } else {
       jsonItems = [];
     }
-  }
-
-  // Helper function to determine CSS classes for text based on active spans
-  function getSpanClasses(styles: SpanType[]): string {
-    const classes: string[] = [];
-
-    if (styles.includes("bold") && styles.includes("italic")) {
-      classes.push("font-bold", "italic");
-    } else if (styles.includes("bold")) {
-      classes.push("font-bold");
-    } else if (styles.includes("italic")) {
-      classes.push("italic");
-    }
-
-    if (styles.includes("strikethrough")) {
-      classes.push("line-through");
-    }
-
-    return classes.join(" ");
-  }
-
-  // Check if style includes code
-  function hasCodeStyle(styles: SpanType[]): boolean {
-    return styles.includes("code");
   }
 </script>
 
@@ -598,233 +384,8 @@
       class="md:col-span-2 bg-white rounded shadow p-4 min-h-[400px] flex flex-col"
     >
       <h2 class="font-bold mb-2 text-lg">Parsed Stream</h2>
-      <div class="flex-1 overflow-auto space-y-2">
-        {#each parsedBlocks as block}
-          {@const blockType = block[0]?.block.type}
-          {@const blockLevel = block[0]?.block.level}
-          {@const blockLanguage = block[0]?.block.language}
-          {@const hasTableCells =
-            blockType === "table_header_cell" || blockType === "table_cell"}
-          {@const tableRows = hasTableCells ? buildTableRows(block) : []}
-
-          <div class="my-1 {hasTableCells ? 'flex flex-wrap gap-0' : ''}">
-            {#if blockType === "heading"}
-              {#if blockLevel === 1}
-                <h1 class="inline text-2xl font-bold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h1>
-              {:else if blockLevel === 2}
-                <h2 class="inline text-xl font-bold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h2>
-              {:else if blockLevel === 3}
-                <h3 class="inline text-lg font-semibold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h3>
-              {:else if blockLevel === 4}
-                <h4 class="inline text-base font-semibold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h4>
-              {:else if blockLevel === 5}
-                <h5 class="inline text-sm font-semibold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h5>
-              {:else if blockLevel === 6}
-                <h6 class="inline text-xs font-semibold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </h6>
-              {:else}
-                <span class="inline font-semibold">
-                  {#each block as chunk}
-                    {@const styles = [
-                      ...chunk.contained.map((s) => s.type),
-                      ...chunk.opening.map((s) => s.type),
-                    ]}
-                    {#if hasCodeStyle(styles)}
-                      <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                        >{chunk.text}</code
-                      >
-                    {:else}
-                      <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                    {/if}
-                  {/each}
-                </span>
-              {/if}
-            {:else if blockType === "code_block"}
-              <pre
-                class="inline bg-gray-100 rounded p-1 font-mono text-sm text-gray-800 overflow-x-auto align-middle"><code
-                  >{#each block as chunk}{chunk.text}{/each}</code
-                ></pre>
-              {#if blockLanguage}
-                <span class="text-xs text-gray-500 ml-2">{blockLanguage}</span>
-              {/if}
-            {:else if blockType === "blockquote"}
-              <span
-                class="inline border-l-4 border-blue-400 pl-2 italic text-gray-700"
-              >
-                {#each block as chunk}
-                  {@const styles = [
-                    ...chunk.contained.map((s) => s.type),
-                    ...chunk.opening.map((s) => s.type),
-                  ]}
-                  {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                      >{chunk.text}</code
-                    >
-                  {:else}
-                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                  {/if}
-                {/each}
-              </span>
-            {:else if blockType === "list_item"}
-              {@const list = block[0]?.block.list}
-              <span class="inline text-base leading-relaxed">
-                <span class="mr-1">
-                  {#if list?.type === "ordered"}
-                    {list.ordinal ?? ""}{list.marker}
-                  {:else}
-                    •
-                  {/if}
-                </span>
-                {#each block as chunk}
-                  {@const styles = [
-                    ...chunk.contained.map((s) => s.type),
-                    ...chunk.opening.map((s) => s.type),
-                  ]}
-                  {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                      >{chunk.text}</code
-                    >
-                  {:else}
-                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                  {/if}
-                {/each}
-              </span>
-            {:else if blockType === "table_header_cell" || blockType === "table_cell"}
-              <div class="inline-block max-w-full overflow-x-auto">
-                <table class="border-collapse border border-gray-300 bg-white text-sm">
-                {#each tableRows as row}
-                  <tr>
-                    {#each row.cells as cell}
-                      <svelte:element
-                        this={cell.type === "table_header_cell" ? "th" : "td"}
-                        class={`min-w-24 border border-gray-300 px-2 py-1 text-sm ${getTableCellAlignClass(
-                          cell,
-                        )} ${cell.type === "table_header_cell"
-                          ? "bg-gray-100 font-semibold"
-                          : "bg-white"}`}
-                      >
-                        {#each cell.chunks as chunk}
-                          {@const styles = [
-                            ...chunk.contained.map((s) => s.type),
-                            ...chunk.opening.map((s) => s.type),
-                          ]}
-                          {#if hasCodeStyle(styles)}
-                            <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                              >{chunk.text}</code
-                            >
-                          {:else}
-                            <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                          {/if}
-                        {/each}
-                      </svelte:element>
-                    {/each}
-                  </tr>
-                {/each}
-                </table>
-              </div>
-            {:else}
-              <!-- Default paragraph rendering -->
-              <span class="inline text-base leading-relaxed">
-                {#each block as chunk}
-                  {@const styles = [
-                    ...chunk.contained.map((s) => s.type),
-                    ...chunk.opening.map((s) => s.type),
-                  ]}
-                  {#if hasCodeStyle(styles)}
-                    <code class="bg-gray-200 rounded px-1 text-sm font-mono"
-                      >{chunk.text}</code
-                    >
-                  {:else}
-                    <span class={getSpanClasses(styles)}>{chunk.text}</span>
-                  {/if}
-                {/each}
-              </span>
-            {/if}
-          </div>
-        {/each}
+      <div class="flex-1 overflow-auto">
+        <ProseMirrorRenderer bind:this={pmRenderer} />
       </div>
     </div>
 

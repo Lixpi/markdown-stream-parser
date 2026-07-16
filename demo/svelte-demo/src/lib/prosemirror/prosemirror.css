@@ -1,0 +1,72 @@
+.ProseMirror {
+    outline: none;
+    word-wrap: break-word;
+}
+
+.ProseMirror p {
+    margin: 0.5rem 0;
+}
+
+.ProseMirror blockquote {
+    border-left: 4px solid #60a5fa;
+    color: #374151;
+    font-style: italic;
+    margin: 0.75rem 0;
+    padding-left: 0.75rem;
+}
+
+.ProseMirror pre {
+    background: #f3f4f6;
+    border-radius: 0.25rem;
+    color: #1f2937;
+    font-size: 0.875rem;
+    overflow-x: auto;
+    padding: 0.5rem;
+    position: relative;
+}
+
+.ProseMirror pre[data-language]::after {
+    color: #6b7280;
+    content: attr(data-language);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.75rem;
+    position: absolute;
+    right: 0.5rem;
+    top: 0.35rem;
+}
+
+.ProseMirror table {
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    margin: 0.75rem 0;
+}
+
+.ProseMirror th,
+.ProseMirror td {
+    border: 1px solid #d1d5db;
+    min-width: 6rem;
+    padding: 0.25rem 0.5rem;
+}
+
+.ProseMirror th {
+    background: #f3f4f6;
+    font-weight: 600;
+}
+
+.ProseMirror li[data-task] {
+    list-style: none;
+}
+
+.ProseMirror li[data-task]::before {
+    display: inline-block;
+    margin-left: -1.25rem;
+    width: 1.25rem;
+}
+
+.ProseMirror li[data-task="unchecked"]::before {
+    content: "☐";
+}
+
+.ProseMirror li[data-task="checked"]::before {
+    content: "☑";
+}

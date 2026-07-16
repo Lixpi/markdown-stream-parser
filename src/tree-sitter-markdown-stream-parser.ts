@@ -1,4 +1,4 @@
-import { Parser, Language, type Tree, type Node } from 'web-tree-sitter'
+import { Parser, Language, type Tree, type Node, type Edit } from 'web-tree-sitter'
 import TokensStreamBuffer from './tokens-stream-buffer.ts'
 import type {
     Chunk,
@@ -353,14 +353,14 @@ export class MarkdownStreamParser {
 
         // For proper incremental parsing, tell tree-sitter what changed
         if (this.currentTree) {
-            this.currentTree.edit({
+            this.currentTree.edit(({
                 startIndex: oldLength,
                 oldEndIndex: oldLength,
                 newEndIndex: this.content.length,
                 startPosition: oldEndPosition,
                 oldEndPosition,
                 newEndPosition: this.endPosition
-            })
+            }) as Edit)
         }
 
         // Parse the updated content
